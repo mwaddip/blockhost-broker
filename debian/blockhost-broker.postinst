@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create config directory
+        mkdir -p /etc/blockhost-broker
+
+        # Copy example config if no config exists
+        if [ ! -f /etc/blockhost-broker/config.toml ]; then
+            cp /usr/share/blockhost-broker/config.example.toml \
+               /etc/blockhost-broker/config.toml
+            chmod 600 /etc/blockhost-broker/config.toml
+            echo "Installed example config to /etc/blockhost-broker/config.toml"
+            echo "Please edit this file before starting the service."
+        fi
+
+        # Create data directory
+        mkdir -p /var/lib/blockhost-broker
+
+        # Generate WireGuard key if not exists
+        if [ ! -f /etc/blockhost-broker/wg-private.key ]; then
+            wg genkey > /etc/blockhost-broker/wg-private.key
+            chmod 600 /etc/blockhost-broker/wg-private.key
+            wg pubkey < /etc/blockhost-broker/wg-private.key \
+               > /etc/blockhost-broker/wg-public.key
+            echo "Generated WireGuard keypair in /etc/blockhost-broker/"
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

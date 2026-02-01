@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME=blockhost-broker
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_install:
+	dh_auto_install
+	# Install client script
+	install -D -m 755 scripts/broker-client.py \
+		debian/blockhost-broker-client/usr/bin/blockhost-broker-client

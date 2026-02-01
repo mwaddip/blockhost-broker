@@ -1,0 +1,10 @@
+blockhost-broker (0.1.0-1) unstable; urgency=medium
+
+  * Initial release
+  * On-chain broker authentication via BrokerRequests contract
+  * NFT ownership verification (ERC721 + Ownable)
+  * ECIES encryption for request/response payloads
+  * WireGuard tunnel management
+  * Client script with persistent wg-quick configuration
+
+ -- Blockhost <info@blockhost.io>  Sat, 01 Feb 2026 18:00:00 +0000

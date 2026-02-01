@@ -1,0 +1,14 @@
+[Unit]
+Description=Blockhost IPv6 Tunnel Broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/blockhost-broker -c /etc/blockhost-broker/config.toml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

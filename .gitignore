@@ -61,8 +61,10 @@ htmlcov/
 
 # Build artifacts
 *.deb
+build-deb/
 debian/.debhelper/
 debian/blockhost-broker/
+debian/blockhost-broker-client/
 
 # Local notes that might contain sensitive info
 notes.md
