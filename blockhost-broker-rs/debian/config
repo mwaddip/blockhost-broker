@@ -1,0 +1,89 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+# Detect IPv6 interfaces
+detect_ipv6_interfaces() {
+    ip -6 addr show scope global 2>/dev/null | \
+        grep -E "inet6 [0-9a-f:]+" | \
+        grep -v "temporary\|deprecated" | \
+        awk '{print $2}' | \
+        head -10
+}
+
+# Only run configuration on fresh install or reconfigure
+case "$1" in
+    configure|reconfigure)
+        # Step 1: Private key setup
+        db_input high blockhost-broker/private-key-action || true
+        db_go || true
+
+        db_get blockhost-broker/private-key-action
+        KEY_ACTION="$RET"
+
+        if [ "$KEY_ACTION" = "provide" ]; then
+            db_input critical blockhost-broker/private-key || true
+            db_go || true
+        fi
+
+        # Step 2: IPv6 configuration
+        INTERFACES=$(detect_ipv6_interfaces | tr '\n' ', ' | sed 's/,$//' | sed 's/,/, /g')
+
+        if [ -n "$INTERFACES" ]; then
+            db_subst blockhost-broker/ipv6-interface INTERFACES "$INTERFACES, manual"
+            db_input high blockhost-broker/ipv6-interface || true
+            db_go || true
+
+            db_get blockhost-broker/ipv6-interface
+            SELECTED_IFACE="$RET"
+
+            if [ "$SELECTED_IFACE" = "manual" ]; then
+                db_input high blockhost-broker/ipv6-prefix || true
+                db_go || true
+            else
+                # Use selected interface's prefix
+                db_set blockhost-broker/ipv6-prefix "$SELECTED_IFACE"
+            fi
+        else
+            # No interfaces detected, ask for manual input
+            db_input high blockhost-broker/ipv6-prefix || true
+            db_go || true
+        fi
+
+        # Get the prefix for broker address default
+        db_get blockhost-broker/ipv6-prefix
+        PREFIX="$RET"
+
+        # Suggest broker address based on prefix
+        if [ -n "$PREFIX" ]; then
+            NETWORK=$(echo "$PREFIX" | cut -d'/' -f1 | sed 's/::$//')
+            SUGGESTED_ADDR="${NETWORK}::1"
+            db_set blockhost-broker/broker-ipv6 "$SUGGESTED_ADDR"
+        fi
+
+        db_input high blockhost-broker/allocation-size || true
+        db_go || true
+
+        db_input high blockhost-broker/broker-ipv6 || true
+        db_go || true
+
+        # Step 3: WireGuard configuration
+        db_input medium blockhost-broker/wg-interface || true
+        db_input medium blockhost-broker/wg-port || true
+        db_input high blockhost-broker/wg-endpoint || true
+        db_go || true
+
+        # Step 4: Contract deployment decision
+        db_input high blockhost-broker/deploy-contract || true
+        db_go || true
+
+        db_get blockhost-broker/deploy-contract
+        if [ "$RET" = "false" ]; then
+            db_input high blockhost-broker/existing-contract || true
+            db_go || true
+        fi
+        ;;
+esac
+
+exit 0

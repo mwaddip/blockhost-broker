@@ -1,0 +1,22 @@
+Source: blockhost-broker
+Section: net
+Priority: optional
+Maintainer: Blockhost <contact@blockhost.io>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.70)
+Standards-Version: 4.6.0
+Homepage: https://blockhost.io
+
+Package: blockhost-broker
+Architecture: any
+Pre-Depends: debconf (>= 0.5) | debconf-2.0
+Depends: ${shlibs:Depends}, ${misc:Depends}, wireguard-tools
+Description: IPv6 tunnel broker for Blockhost network
+ blockhost-broker is a daemon that manages IPv6 prefix allocations
+ for Blockhost servers using on-chain authentication via NFT
+ contract ownership verification.
+ .
+ Features:
+  - On-chain authentication via Ethereum smart contracts
+  - ECIES encryption for secure communication
+  - WireGuard peer management
+  - SQLite-based IPAM database

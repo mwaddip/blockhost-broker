@@ -1,0 +1,141 @@
+Template: blockhost-broker/private-key-action
+Type: select
+Choices: generate, provide, skip
+Default: generate
+Description: Ethereum private key setup
+ The broker needs an Ethereum private key to deploy contracts and sign transactions.
+ .
+ Choose how to set up your private key:
+  - generate: Create a new random key
+  - provide: Enter an existing key
+  - skip: Configure manually later
+
+Template: blockhost-broker/private-key
+Type: password
+Description: Ethereum private key
+ Enter your Ethereum private key (hex format, with or without 0x prefix).
+ .
+ This key will be stored securely with restricted permissions.
+
+Template: blockhost-broker/wallet-address
+Type: note
+Description: Wallet address created
+ Your wallet address is: ${ADDRESS}
+ .
+ This address will be used for contract deployment and operations.
+
+Template: blockhost-broker/fund-wallet
+Type: boolean
+Default: false
+Description: Wallet needs funding
+ Your wallet has insufficient funds for contract deployment.
+ .
+ Current balance: ${BALANCE}
+ Required minimum: 0.01 ETH (Sepolia testnet)
+ .
+ Please send Sepolia ETH to: ${ADDRESS}
+ .
+ You can get free Sepolia ETH from:
+  - https://sepoliafaucet.com
+  - https://www.alchemy.com/faucets/ethereum-sepolia
+ .
+ Have you sent funds to the wallet?
+
+Template: blockhost-broker/deploy-contract
+Type: boolean
+Default: true
+Description: Deploy BrokerRequests contract?
+ Would you like to deploy a new BrokerRequests contract?
+ .
+ This contract handles allocation requests from clients.
+ You need one deployed contract per broker instance.
+ .
+ If you already have a contract deployed, choose No and provide the address.
+
+Template: blockhost-broker/existing-contract
+Type: string
+Description: Existing BrokerRequests contract address
+ Enter the address of your existing BrokerRequests contract.
+ .
+ Format: 0x followed by 40 hexadecimal characters
+ Example: 0x43880eA324BF7842A72a9ed0680B3dd1cD6CD7C8
+
+Template: blockhost-broker/contract-deployed
+Type: note
+Description: Contract deployed successfully
+ BrokerRequests contract deployed at: ${CONTRACT_ADDRESS}
+ .
+ This has been saved to your configuration.
+
+Template: blockhost-broker/ipv6-interface
+Type: select
+Choices: ${INTERFACES}
+Description: IPv6 interface selection
+ Select the IPv6 interface to use for the broker.
+ .
+ The broker will allocate prefixes from this interface's address range.
+
+Template: blockhost-broker/ipv6-prefix
+Type: string
+Description: Upstream IPv6 prefix
+ Enter the upstream IPv6 prefix for allocations.
+ .
+ This is the prefix range from which client allocations will be made.
+ .
+ Format: address/prefix_length (e.g., 2001:db8::/48)
+
+Template: blockhost-broker/allocation-size
+Type: select
+Choices: 64, 112, 120, 124, 128
+Default: 64
+Description: Allocation size (prefix length)
+ Select the prefix length for client allocations.
+ .
+  /64: Standard (18 quintillion addresses per host)
+  /112: Medium (65,536 addresses per host)
+  /120: Small (256 addresses per host)
+  /124: Minimal (16 addresses per host)
+  /128: Single address per host
+
+Template: blockhost-broker/broker-ipv6
+Type: string
+Description: Broker IPv6 address
+ Enter the broker's own IPv6 address.
+ .
+ This should be an address within your upstream prefix that the broker
+ will use for its own communication.
+ .
+ Example: 2001:db8::1
+
+Template: blockhost-broker/wg-interface
+Type: string
+Default: wg-broker
+Description: WireGuard interface name
+ Enter the name for the WireGuard interface.
+
+Template: blockhost-broker/wg-port
+Type: string
+Default: 51820
+Description: WireGuard listen port
+ Enter the UDP port for WireGuard to listen on.
+
+Template: blockhost-broker/wg-endpoint
+Type: string
+Description: Public endpoint (hostname:port)
+ Enter the public hostname or IP address and port that clients
+ will use to connect to this broker.
+ .
+ Format: hostname:port or ip:port
+ Example: broker.example.com:51820
+
+Template: blockhost-broker/setup-complete
+Type: note
+Description: Setup complete
+ Blockhost Broker has been configured.
+ .
+ Configuration file: /etc/blockhost-broker/config.toml
+ .
+ Next steps:
+  1. Register your broker in BrokerRegistry smart contract
+  2. Start the service: systemctl enable --now blockhost-broker
+  3. Monitor logs: journalctl -u blockhost-broker -f

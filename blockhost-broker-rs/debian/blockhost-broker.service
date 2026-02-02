@@ -1,0 +1,37 @@
+[Unit]
+Description=Blockhost IPv6 Tunnel Broker
+Documentation=https://blockhost.io/docs/broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/blockhost-broker run
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Required for WireGuard management
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# Allow read/write to specific paths
+ReadWritePaths=/var/lib/blockhost-broker
+ReadWritePaths=/etc/wireguard
+
+# Configuration directory
+ConfigurationDirectory=blockhost-broker
+StateDirectory=blockhost-broker
+
+[Install]
+WantedBy=multi-user.target

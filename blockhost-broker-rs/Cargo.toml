@@ -1,0 +1,56 @@
+[package]
+name = "blockhost-broker"
+version = "0.1.0"
+edition = "2021"
+description = "IPv6 tunnel broker for Blockhost network with on-chain authentication"
+license = "MIT"
+authors = ["Blockhost <contact@blockhost.io>"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full", "signal"] }
+
+# Ethereum
+ethers = { version = "2", features = ["rustls"] }
+
+# ECIES encryption (secp256k1 compatible with eciespy)
+ecies = "0.2"
+k256 = "0.13"
+
+# HTTP server (internal only)
+axum = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Utilities
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+anyhow = "1"
+hex = "0.4"
+base64 = "0.22"
+sha2 = "0.10"
+ipnet = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+zeroize = "1"
+rand = "0.8"
+futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+
+[build-dependencies]
+ethers = { version = "2", features = ["abigen"] }
+
+[[bin]]
+name = "blockhost-broker"
+path = "src/main.rs"

@@ -1,0 +1,60 @@
+# Blockhost Broker Configuration
+# Copy this file to /etc/blockhost-broker/config.toml and customize
+
+[broker]
+# Upstream IPv6 prefix from your tunnel provider
+upstream_prefix = "2001:db8::/48"
+
+# Size of allocations to hand out (prefix length)
+allocation_size = 64
+
+# Broker's own IPv6 address (within upstream prefix)
+broker_ipv6 = "2001:db8::1"
+
+[wireguard]
+# WireGuard interface name
+interface = "wg-broker"
+
+# WireGuard listen port
+listen_port = 51820
+
+# Path to WireGuard private key
+private_key_file = "/etc/blockhost-broker/wg-private.key"
+
+# Public endpoint for clients to connect to
+public_endpoint = "your-server.example.com:51820"
+
+[api]
+# API listen address (internal management only)
+listen_host = "127.0.0.1"
+listen_port = 8080
+
+[database]
+# SQLite database path
+path = "/var/lib/blockhost-broker/ipam.db"
+
+[onchain]
+# Enable on-chain authentication
+enabled = true
+
+# Ethereum RPC URL (Sepolia testnet)
+rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
+
+# Chain ID (11155111 = Sepolia)
+chain_id = 11155111
+
+# Path to operator private key (hex-encoded)
+private_key_file = "/etc/blockhost-broker/deployer.key"
+
+# Path to ECIES private key for encryption
+# Generate with: blockhost-broker generate-key -o /etc/blockhost-broker/ecies.key
+ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
+
+# BrokerRegistry contract address (optional)
+registry_contract = "0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf"
+
+# BrokerRequests contract address (required for on-chain mode)
+requests_contract = "0xb7C329cFD95ADC4eE3413918864d4506540f7341"
+
+# Poll interval for new requests (milliseconds)
+poll_interval_ms = 5000

@@ -29,7 +29,6 @@ contract BrokerRequests is Ownable {
         bytes encryptedPayload;     // ECIES encrypted request data
         RequestStatus status;
         bytes responsePayload;      // ECIES encrypted response data (if approved)
-        string rejectionReason;     // Reason for rejection (if rejected)
         uint256 submittedAt;
         uint256 respondedAt;
     }
@@ -92,7 +91,6 @@ contract BrokerRequests is Ownable {
             encryptedPayload: encryptedPayload,
             status: RequestStatus.Pending,
             responsePayload: "",
-            rejectionReason: "",
             submittedAt: block.timestamp,
             respondedAt: 0
         }));
@@ -105,33 +103,24 @@ contract BrokerRequests is Ownable {
     }
 
     /**
-     * @notice Submit a response to an allocation request (broker only)
-     * @param requestId Request ID to respond to
-     * @param approved Whether to approve or reject the request
-     * @param encryptedPayload ECIES encrypted response data (if approved)
-     * @param rejectionReason Reason for rejection (if rejected)
+     * @notice Submit an approval response to an allocation request (broker only)
+     * @dev Rejections are silent - broker simply doesn't respond and request expires
+     * @param requestId Request ID to approve
+     * @param encryptedPayload ECIES encrypted response data
      */
     function submitResponse(
         uint256 requestId,
-        bool approved,
-        bytes calldata encryptedPayload,
-        string calldata rejectionReason
+        bytes calldata encryptedPayload
     ) external onlyOwner {
         require(requestId > 0 && requestId <= requests.length, "Invalid request ID");
 
         Request storage request = requests[requestId - 1];
         require(request.status == RequestStatus.Pending, "Request not pending");
         require(block.timestamp <= request.submittedAt + requestExpirationTime, "Request expired");
+        require(encryptedPayload.length > 0, "Response requires payload");
 
-        if (approved) {
-            require(encryptedPayload.length > 0, "Approved response requires payload");
-            request.status = RequestStatus.Approved;
-            request.responsePayload = encryptedPayload;
-        } else {
-            request.status = RequestStatus.Rejected;
-            request.rejectionReason = rejectionReason;
-        }
-
+        request.status = RequestStatus.Approved;
+        request.responsePayload = encryptedPayload;
         request.respondedAt = block.timestamp;
 
         emit ResponseSubmitted(requestId, request.status, encryptedPayload);
@@ -168,62 +157,6 @@ contract BrokerRequests is Ownable {
     function getRequest(uint256 requestId) external view returns (Request memory request) {
         require(requestId > 0 && requestId <= requests.length, "Invalid request ID");
         return requests[requestId - 1];
-    }
-
-    /**
-     * @notice Get all pending requests
-     * @return pendingIds Array of pending request IDs
-     * @return pendingRequests Array of pending request details
-     */
-    function getPendingRequests()
-        external
-        view
-        returns (uint256[] memory pendingIds, Request[] memory pendingRequests)
-    {
-        // Count pending requests
-        uint256 pendingCount = 0;
-        for (uint256 i = 0; i < requests.length; i++) {
-            if (
-                requests[i].status == RequestStatus.Pending &&
-                block.timestamp <= requests[i].submittedAt + requestExpirationTime
-            ) {
-                pendingCount++;
-            }
-        }
-
-        // Allocate arrays
-        pendingIds = new uint256[](pendingCount);
-        pendingRequests = new Request[](pendingCount);
-
-        // Fill arrays
-        uint256 j = 0;
-        for (uint256 i = 0; i < requests.length; i++) {
-            if (
-                requests[i].status == RequestStatus.Pending &&
-                block.timestamp <= requests[i].submittedAt + requestExpirationTime
-            ) {
-                pendingIds[j] = i + 1;
-                pendingRequests[j] = requests[i];
-                j++;
-            }
-        }
-    }
-
-    /**
-     * @notice Get requests by requester
-     * @param requester Address of the requester
-     * @return requesterRequests Array of request details
-     */
-    function getRequestsByRequester(address requester)
-        external
-        view
-        returns (Request[] memory requesterRequests)
-    {
-        uint256[] storage ids = requesterToRequestIds[requester];
-        requesterRequests = new Request[](ids.length);
-        for (uint256 i = 0; i < ids.length; i++) {
-            requesterRequests[i] = requests[ids[i] - 1];
-        }
     }
 
     /**

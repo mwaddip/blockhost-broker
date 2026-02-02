@@ -1,0 +1,11 @@
+blockhost-broker (0.1.0-1) unstable; urgency=medium
+
+  * Initial Rust implementation
+  * On-chain authentication via NFT contract ownership
+  * Lazy polling for request processing (no unbounded loops)
+  * Silent rejections (requests expire naturally)
+  * ECIES encryption compatible with Python eciespy
+  * WireGuard peer management
+  * SQLite-based IPAM database
+
+ -- Blockhost <contact@blockhost.io>  Sun, 02 Feb 2025 00:00:00 +0000

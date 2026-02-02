@@ -10,6 +10,11 @@ Environment variables should be in `~/projects/sharedenv/blockhost.env` (not com
 
 ## Deployed Contracts (Sepolia Testnet)
 
+### v2 (Lazy Polling / No Unbounded Loops)
+- **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
+- **BrokerRequests**: `0xb7C329cFD95ADC4eE3413918864d4506540f7341`
+
+### v1 (Legacy - has unbounded loops)
 - **BrokerRegistry**: `0x4bfA5E3B23ea65451f5f430B573930ff5FfF5074`
 - **BrokerRequests**: `0x43880eA324BF7842A72a9ed0680B3dd1cD6CD7C8`
 

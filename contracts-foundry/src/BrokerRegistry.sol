@@ -44,7 +44,8 @@ contract BrokerRegistry is Ownable {
     constructor() Ownable(msg.sender) {}
 
     /**
-     * @notice Register a new broker
+     * @notice Register a new broker (owner only)
+     * @param operator Address of the broker operator wallet
      * @param requestsContract Address of the broker's BrokerRequests contract
      * @param encryptionPubkey secp256k1 public key for ECIES encryption (65 bytes)
      * @param region Geographic region hint
@@ -52,18 +53,20 @@ contract BrokerRegistry is Ownable {
      * @return brokerId The ID of the newly registered broker
      */
     function registerBroker(
+        address operator,
         address requestsContract,
         bytes calldata encryptionPubkey,
         string calldata region,
         uint256 capacity
-    ) external returns (uint256 brokerId) {
+    ) external onlyOwner returns (uint256 brokerId) {
+        require(operator != address(0), "Invalid operator address");
         require(requestsContract != address(0), "Invalid requests contract");
         require(encryptionPubkey.length == 65, "Pubkey must be 65 bytes (uncompressed secp256k1)");
-        require(operatorToBrokerId[msg.sender] == 0, "Operator already registered");
+        require(operatorToBrokerId[operator] == 0, "Operator already registered");
         require(requestsContractToBrokerId[requestsContract] == 0, "Requests contract already registered");
 
         brokers.push(Broker({
-            operator: msg.sender,
+            operator: operator,
             requestsContract: requestsContract,
             encryptionPubkey: encryptionPubkey,
             region: region,
@@ -74,10 +77,10 @@ contract BrokerRegistry is Ownable {
         }));
 
         brokerId = brokers.length; // 1-indexed
-        operatorToBrokerId[msg.sender] = brokerId;
+        operatorToBrokerId[operator] = brokerId;
         requestsContractToBrokerId[requestsContract] = brokerId;
 
-        emit BrokerRegistered(brokerId, msg.sender, requestsContract, region);
+        emit BrokerRegistered(brokerId, operator, requestsContract, region);
     }
 
     /**
@@ -159,71 +162,6 @@ contract BrokerRegistry is Ownable {
     function getBroker(uint256 brokerId) external view returns (Broker memory broker) {
         require(brokerId > 0 && brokerId <= brokers.length, "Invalid broker ID");
         return brokers[brokerId - 1];
-    }
-
-    /**
-     * @notice Get all active brokers
-     * @return activeBrokers Array of active broker details with their IDs
-     */
-    function getActiveBrokers() external view returns (uint256[] memory, Broker[] memory) {
-        // First count active brokers
-        uint256 activeCount = 0;
-        for (uint256 i = 0; i < brokers.length; i++) {
-            if (brokers[i].active) {
-                activeCount++;
-            }
-        }
-
-        // Allocate arrays
-        uint256[] memory ids = new uint256[](activeCount);
-        Broker[] memory activeBrokers = new Broker[](activeCount);
-
-        // Fill arrays
-        uint256 j = 0;
-        for (uint256 i = 0; i < brokers.length; i++) {
-            if (brokers[i].active) {
-                ids[j] = i + 1; // 1-indexed
-                activeBrokers[j] = brokers[i];
-                j++;
-            }
-        }
-
-        return (ids, activeBrokers);
-    }
-
-    /**
-     * @notice Get active brokers in a specific region
-     * @param region Region to filter by
-     * @return ids Broker IDs
-     * @return regionBrokers Broker details
-     */
-    function getActiveBrokersByRegion(string calldata region)
-        external
-        view
-        returns (uint256[] memory ids, Broker[] memory regionBrokers)
-    {
-        // First count matching brokers
-        uint256 count = 0;
-        bytes32 regionHash = keccak256(bytes(region));
-        for (uint256 i = 0; i < brokers.length; i++) {
-            if (brokers[i].active && keccak256(bytes(brokers[i].region)) == regionHash) {
-                count++;
-            }
-        }
-
-        // Allocate arrays
-        ids = new uint256[](count);
-        regionBrokers = new Broker[](count);
-
-        // Fill arrays
-        uint256 j = 0;
-        for (uint256 i = 0; i < brokers.length; i++) {
-            if (brokers[i].active && keccak256(bytes(brokers[i].region)) == regionHash) {
-                ids[j] = i + 1;
-                regionBrokers[j] = brokers[i];
-                j++;
-            }
-        }
     }
 
     /**

@@ -1,0 +1,226 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR="/etc/blockhost-broker"
+DATA_DIR="/var/lib/blockhost-broker"
+DEPLOYER_KEY="$CONFIG_DIR/deployer.key"
+ECIES_KEY="$CONFIG_DIR/ecies.key"
+WG_PRIVATE_KEY="$CONFIG_DIR/wg-private.key"
+WG_PUBLIC_KEY="$CONFIG_DIR/wg-public.key"
+CONFIG_FILE="$CONFIG_DIR/config.toml"
+
+RPC_URL="https://ethereum-sepolia-rpc.publicnode.com"
+CHAIN_ID="11155111"
+
+case "$1" in
+    configure)
+        # Create directories
+        if [ ! -d "$CONFIG_DIR" ]; then
+            mkdir -p "$CONFIG_DIR"
+            chmod 750 "$CONFIG_DIR"
+        fi
+
+        if [ ! -d "$DATA_DIR" ]; then
+            mkdir -p "$DATA_DIR"
+            chmod 750 "$DATA_DIR"
+        fi
+
+        # Handle private key setup
+        db_get blockhost-broker/private-key-action
+        KEY_ACTION="$RET"
+
+        case "$KEY_ACTION" in
+            generate)
+                if [ ! -f "$DEPLOYER_KEY" ]; then
+                    # Generate new key using the binary
+                    /usr/bin/blockhost-broker wallet generate -o "$DEPLOYER_KEY" 2>/dev/null || {
+                        # Fallback: generate with openssl
+                        openssl rand -hex 32 > "$DEPLOYER_KEY"
+                        chmod 600 "$DEPLOYER_KEY"
+                    }
+                    echo "Generated new deployer key at $DEPLOYER_KEY"
+                fi
+                ;;
+            provide)
+                db_get blockhost-broker/private-key
+                if [ -n "$RET" ]; then
+                    # Remove 0x prefix if present
+                    KEY=$(echo "$RET" | sed 's/^0x//')
+                    echo "$KEY" > "$DEPLOYER_KEY"
+                    chmod 600 "$DEPLOYER_KEY"
+                    echo "Saved provided private key to $DEPLOYER_KEY"
+                fi
+                # Clear the password from debconf
+                db_reset blockhost-broker/private-key
+                ;;
+            skip)
+                echo "Skipping private key setup. Configure manually later."
+                ;;
+        esac
+
+        # Get wallet address if key exists
+        WALLET_ADDRESS=""
+        if [ -f "$DEPLOYER_KEY" ]; then
+            WALLET_ADDRESS=$(/usr/bin/blockhost-broker wallet address -k "$DEPLOYER_KEY" 2>/dev/null || echo "")
+        fi
+
+        # Generate WireGuard keys if needed
+        if [ ! -f "$WG_PRIVATE_KEY" ]; then
+            wg genkey > "$WG_PRIVATE_KEY"
+            chmod 600 "$WG_PRIVATE_KEY"
+            wg pubkey < "$WG_PRIVATE_KEY" > "$WG_PUBLIC_KEY"
+            echo "Generated WireGuard keys"
+            echo "Public key: $(cat $WG_PUBLIC_KEY)"
+        fi
+
+        # Generate ECIES key if needed
+        if [ ! -f "$ECIES_KEY" ]; then
+            /usr/bin/blockhost-broker generate-key -o "$ECIES_KEY" >/dev/null 2>&1 || {
+                echo "Warning: Could not generate ECIES key. Run manually:"
+                echo "  blockhost-broker generate-key -o $ECIES_KEY"
+            }
+        fi
+
+        # Get debconf values for configuration
+        db_get blockhost-broker/ipv6-prefix
+        UPSTREAM_PREFIX="$RET"
+
+        db_get blockhost-broker/allocation-size
+        ALLOCATION_SIZE="${RET:-64}"
+
+        db_get blockhost-broker/broker-ipv6
+        BROKER_IPV6="$RET"
+
+        db_get blockhost-broker/wg-interface
+        WG_INTERFACE="${RET:-wg-broker}"
+
+        db_get blockhost-broker/wg-port
+        WG_PORT="${RET:-51820}"
+
+        db_get blockhost-broker/wg-endpoint
+        WG_ENDPOINT="$RET"
+
+        # Handle contract deployment
+        REQUESTS_CONTRACT=""
+        db_get blockhost-broker/deploy-contract
+        DEPLOY_CONTRACT="$RET"
+
+        if [ "$DEPLOY_CONTRACT" = "true" ] && [ -f "$DEPLOYER_KEY" ]; then
+            echo "Checking wallet balance..."
+            BALANCE=$(/usr/bin/blockhost-broker wallet balance -k "$DEPLOYER_KEY" 2>/dev/null | grep "Balance:" | awk '{print $2}' || echo "0")
+
+            # Simple check - if balance contains "0.00000" assume insufficient
+            if echo "$BALANCE" | grep -q "^0\.0000"; then
+                db_subst blockhost-broker/fund-wallet ADDRESS "$WALLET_ADDRESS"
+                db_subst blockhost-broker/fund-wallet BALANCE "$BALANCE"
+                db_input critical blockhost-broker/fund-wallet || true
+                db_go || true
+
+                # Re-check balance
+                BALANCE=$(/usr/bin/blockhost-broker wallet balance -k "$DEPLOYER_KEY" 2>/dev/null | grep "Balance:" | awk '{print $2}' || echo "0")
+            fi
+
+            echo "Deploying BrokerRequests contract..."
+            DEPLOY_OUTPUT=$(/usr/bin/blockhost-broker deploy-requests \
+                --rpc-url "$RPC_URL" \
+                --chain-id "$CHAIN_ID" \
+                --private-key "$DEPLOYER_KEY" 2>&1) || {
+                echo "Warning: Contract deployment failed:"
+                echo "$DEPLOY_OUTPUT"
+                echo ""
+                echo "You can deploy manually later with:"
+                echo "  blockhost-broker deploy-requests --rpc-url $RPC_URL --chain-id $CHAIN_ID --private-key $DEPLOYER_KEY"
+            }
+
+            # Extract contract address from output
+            REQUESTS_CONTRACT=$(echo "$DEPLOY_OUTPUT" | grep "^Address:" | awk '{print $2}' || echo "")
+
+            if [ -n "$REQUESTS_CONTRACT" ]; then
+                db_subst blockhost-broker/contract-deployed CONTRACT_ADDRESS "$REQUESTS_CONTRACT"
+                db_input high blockhost-broker/contract-deployed || true
+                db_go || true
+            fi
+        else
+            db_get blockhost-broker/existing-contract
+            REQUESTS_CONTRACT="$RET"
+        fi
+
+        # Write configuration file
+        if [ ! -f "$CONFIG_FILE" ] || [ "$1" = "reconfigure" ]; then
+            cat > "$CONFIG_FILE" << EOF
+# Blockhost Broker Configuration
+# Generated during package installation
+
+[broker]
+upstream_prefix = "${UPSTREAM_PREFIX:-2001:db8::/48}"
+allocation_size = ${ALLOCATION_SIZE:-64}
+broker_ipv6 = "${BROKER_IPV6:-2001:db8::1}"
+
+[wireguard]
+interface = "${WG_INTERFACE}"
+listen_port = ${WG_PORT}
+private_key_file = "$WG_PRIVATE_KEY"
+public_endpoint = "${WG_ENDPOINT:-your-server.example.com:51820}"
+
+[api]
+listen_host = "127.0.0.1"
+listen_port = 8080
+
+[database]
+path = "$DATA_DIR/ipam.db"
+
+[onchain]
+enabled = true
+rpc_url = "$RPC_URL"
+chain_id = $CHAIN_ID
+private_key_file = "$DEPLOYER_KEY"
+ecies_private_key_file = "$ECIES_KEY"
+EOF
+
+            if [ -n "$REQUESTS_CONTRACT" ]; then
+                echo "requests_contract = \"$REQUESTS_CONTRACT\"" >> "$CONFIG_FILE"
+            else
+                echo "# requests_contract = \"0x...\"" >> "$CONFIG_FILE"
+            fi
+
+            echo "poll_interval_ms = 5000" >> "$CONFIG_FILE"
+
+            chmod 640 "$CONFIG_FILE"
+            echo "Configuration written to $CONFIG_FILE"
+        fi
+
+        # Show setup complete message
+        db_input high blockhost-broker/setup-complete || true
+        db_go || true
+
+        # Summary
+        echo ""
+        echo "=========================================="
+        echo "  Blockhost Broker Installation Complete"
+        echo "=========================================="
+        echo ""
+        if [ -n "$WALLET_ADDRESS" ]; then
+            echo "Operator address: $WALLET_ADDRESS"
+        fi
+        if [ -n "$REQUESTS_CONTRACT" ]; then
+            echo "Requests contract: $REQUESTS_CONTRACT"
+        fi
+        if [ -f "$ECIES_KEY" ]; then
+            ECIES_PUBKEY=$(/usr/bin/blockhost-broker generate-key -o /dev/null 2>&1 | grep "Public key" | awk '{print $NF}' || echo "Run: blockhost-broker generate-key -o /tmp/test to see format")
+            echo "ECIES public key: (check $ECIES_KEY)"
+        fi
+        if [ -f "$WG_PUBLIC_KEY" ]; then
+            echo "WireGuard public key: $(cat $WG_PUBLIC_KEY)"
+        fi
+        echo ""
+        echo "To start the broker:"
+        echo "  systemctl enable --now blockhost-broker"
+        echo ""
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
