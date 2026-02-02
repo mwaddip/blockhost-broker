@@ -1,6 +1,0 @@
-# Requirements for broker-client.py
-# Install with: pip install -r requirements.txt
-
-web3>=6.0.0
-eciespy>=0.4.0
-eth-account>=0.10.0
