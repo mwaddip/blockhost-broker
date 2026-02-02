@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+VENV_DIR="/opt/blockhost-client"
+REQUIREMENTS="/opt/blockhost-client/requirements.txt"
+
+case "$1" in
+    configure)
+        # Create config directory
+        if [ ! -d /etc/blockhost ]; then
+            mkdir -p /etc/blockhost
+            chmod 750 /etc/blockhost
+        fi
+
+        # Create virtual environment if it doesn't exist
+        if [ ! -d "$VENV_DIR/venv" ]; then
+            echo "Creating Python virtual environment..."
+            python3 -m venv "$VENV_DIR/venv"
+        fi
+
+        # Install/upgrade dependencies
+        echo "Installing Python dependencies..."
+        "$VENV_DIR/venv/bin/pip" install --upgrade pip >/dev/null
+        "$VENV_DIR/venv/bin/pip" install -r "$REQUIREMENTS" >/dev/null
+
+        echo ""
+        echo "blockhost-broker-client installed successfully!"
+        echo ""
+        echo "Usage:"
+        echo "  broker-client request --nft-contract 0x... --wallet-key /path/to/key"
+        echo "  broker-client status --nft-contract 0x..."
+        echo "  broker-client install"
+        echo ""
+        ;;
+esac
+
+exit 0

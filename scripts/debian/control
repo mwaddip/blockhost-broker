@@ -1,0 +1,13 @@
+Package: blockhost-broker-client
+Version: 0.1.0
+Section: net
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.8), python3-venv, wireguard-tools
+Maintainer: Blockhost <contact@blockhost.io>
+Description: Blockhost broker client for Proxmox servers
+ Client script for requesting IPv6 prefix allocations from
+ blockhost-broker via on-chain authentication.
+ .
+ This package is installed on Proxmox servers that need IPv6
+ connectivity through the Blockhost network.

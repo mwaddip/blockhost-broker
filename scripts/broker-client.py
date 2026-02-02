@@ -39,6 +39,7 @@ try:
     from eth_keys import keys
     from web3 import Web3
     from web3.exceptions import ContractLogicError
+    import urllib.request
 except ImportError as e:
     print(f"Missing dependency: {e}", file=sys.stderr)
     print("Install with: pip install web3 eciespy eth-account", file=sys.stderr)
@@ -51,6 +52,21 @@ DEFAULT_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com"
 DEFAULT_CHAIN_ID = 11155111
 DEFAULT_POLL_INTERVAL = 5  # seconds
 DEFAULT_TIMEOUT = 300  # 5 minutes
+
+# Remote configuration URL - contains the current BrokerRegistry contract address
+# This allows updating the registry address without releasing a new client version
+REGISTRY_CONFIG_URL = "https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json"
+
+
+def fetch_registry_address() -> Optional[str]:
+    """Fetch the current BrokerRegistry contract address from remote config."""
+    try:
+        with urllib.request.urlopen(REGISTRY_CONFIG_URL, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return data.get("registry_contract")
+    except Exception as e:
+        print(f"Warning: Could not fetch registry address: {e}", file=sys.stderr)
+        return None
 
 
 # Contract ABIs (minimal subsets needed for client operations)
@@ -1038,6 +1054,17 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Fetch registry address from remote if not provided
+    if not args.registry_contract:
+        print("Fetching registry address from remote config...")
+        args.registry_contract = fetch_registry_address()
+        if args.registry_contract:
+            print(f"Using registry: {args.registry_contract}")
+        elif args.command in ("request", "list-brokers"):
+            print("Error: Could not fetch registry address and none provided", file=sys.stderr)
+            print("Use --registry-contract to specify manually", file=sys.stderr)
+            return 1
 
     if args.command == "request":
         return cmd_request(args)

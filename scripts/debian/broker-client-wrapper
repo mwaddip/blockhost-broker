@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/blockhost-client/venv/bin/python3 /opt/blockhost-client/broker-client.py "$@"
