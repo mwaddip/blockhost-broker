@@ -32,6 +32,20 @@ broker-client.py request --help
 broker-client.py install --help
 ```
 
+## Important: Client/Server Compatibility
+
+**Whenever the broker daemon or smart contracts are updated, the broker-client must be tested and updated if necessary.**
+
+Components that must stay in sync:
+- `scripts/broker-client.py` - Client ABI definitions must match deployed contracts
+- `blockhost-broker-rs/` - Rust broker must match contract ABIs
+- `contracts/` - Solidity contract interfaces
+
+Common breaking changes to watch for:
+- Contract function signature changes (e.g., removing `getActiveBrokers()`)
+- Struct field changes (e.g., removing `rejectionReason`)
+- New/removed status codes
+
 ## Architecture
 
 See DESIGN.md for the on-chain authentication flow.
