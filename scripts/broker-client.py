@@ -80,30 +80,6 @@ BROKER_REGISTRY_ABI = [
         "type": "function",
     },
     {
-        "inputs": [],
-        "name": "getActiveBrokers",
-        "outputs": [
-            {"internalType": "uint256[]", "name": "", "type": "uint256[]"},
-            {
-                "components": [
-                    {"internalType": "address", "name": "operator", "type": "address"},
-                    {"internalType": "address", "name": "requestsContract", "type": "address"},
-                    {"internalType": "bytes", "name": "encryptionPubkey", "type": "bytes"},
-                    {"internalType": "string", "name": "region", "type": "string"},
-                    {"internalType": "bool", "name": "active", "type": "bool"},
-                    {"internalType": "uint256", "name": "capacity", "type": "uint256"},
-                    {"internalType": "uint256", "name": "currentLoad", "type": "uint256"},
-                    {"internalType": "uint256", "name": "registeredAt", "type": "uint256"},
-                ],
-                "internalType": "struct BrokerRegistry.Broker[]",
-                "name": "",
-                "type": "tuple[]",
-            },
-        ],
-        "stateMutability": "view",
-        "type": "function",
-    },
-    {
         "inputs": [{"internalType": "uint256", "name": "brokerId", "type": "uint256"}],
         "name": "getBroker",
         "outputs": [
@@ -143,22 +119,14 @@ BROKER_REQUESTS_ABI = [
         "inputs": [{"internalType": "uint256", "name": "requestId", "type": "uint256"}],
         "name": "getRequest",
         "outputs": [
-            {
-                "components": [
-                    {"internalType": "uint256", "name": "id", "type": "uint256"},
-                    {"internalType": "address", "name": "requester", "type": "address"},
-                    {"internalType": "address", "name": "nftContract", "type": "address"},
-                    {"internalType": "bytes", "name": "encryptedPayload", "type": "bytes"},
-                    {"internalType": "uint8", "name": "status", "type": "uint8"},
-                    {"internalType": "bytes", "name": "responsePayload", "type": "bytes"},
-                    {"internalType": "string", "name": "rejectionReason", "type": "string"},
-                    {"internalType": "uint256", "name": "submittedAt", "type": "uint256"},
-                    {"internalType": "uint256", "name": "respondedAt", "type": "uint256"},
-                ],
-                "internalType": "struct BrokerRequests.Request",
-                "name": "request",
-                "type": "tuple",
-            }
+            {"internalType": "uint256", "name": "id", "type": "uint256"},
+            {"internalType": "address", "name": "requester", "type": "address"},
+            {"internalType": "address", "name": "nftContract", "type": "address"},
+            {"internalType": "bytes", "name": "encryptedPayload", "type": "bytes"},
+            {"internalType": "uint8", "name": "status", "type": "uint8"},
+            {"internalType": "bytes", "name": "responsePayload", "type": "bytes"},
+            {"internalType": "uint256", "name": "submittedAt", "type": "uint256"},
+            {"internalType": "uint256", "name": "respondedAt", "type": "uint256"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -183,10 +151,9 @@ BROKER_REQUESTS_ABI = [
     },
 ]
 
-# Request status enum
+# Request status enum (v2 contracts use silent rejections - no REJECTED status)
 REQUEST_STATUS_PENDING = 0
 REQUEST_STATUS_APPROVED = 1
-REQUEST_STATUS_REJECTED = 2
 REQUEST_STATUS_EXPIRED = 3
 
 
@@ -293,24 +260,36 @@ class BrokerClient:
             self.registry = None
 
     def get_active_brokers(self) -> list[BrokerInfo]:
-        """Get list of active brokers from registry."""
+        """Get list of active brokers from registry using lazy iteration."""
         if not self.registry:
             raise ValueError("Registry contract not configured")
 
-        ids, brokers = self.registry.functions.getActiveBrokers().call()
+        # Get total broker count
+        count = self.registry.functions.getBrokerCount().call()
+
         result = []
-        for broker_id, broker in zip(ids, brokers):
-            result.append(
-                BrokerInfo(
-                    id=broker_id,
-                    operator=broker[0],
-                    requests_contract=broker[1],
-                    encryption_pubkey=broker[2],
-                    region=broker[3],
-                    capacity=broker[5],
-                    current_load=broker[6],
-                )
-            )
+        # Iterate through all brokers (IDs start at 1)
+        for broker_id in range(1, count + 1):
+            try:
+                broker = self.registry.functions.getBroker(broker_id).call()
+                # broker[4] is the 'active' field
+                if broker[4]:  # Only include active brokers
+                    result.append(
+                        BrokerInfo(
+                            id=broker_id,
+                            operator=broker[0],
+                            requests_contract=broker[1],
+                            encryption_pubkey=broker[2],
+                            region=broker[3],
+                            capacity=broker[5],
+                            current_load=broker[6],
+                        )
+                    )
+            except Exception as e:
+                # Skip brokers that fail to load
+                print(f"Warning: Could not load broker #{broker_id}: {e}", file=sys.stderr)
+                continue
+
         return result
 
     def get_broker(self, broker_id: int) -> BrokerInfo:
@@ -382,18 +361,18 @@ class BrokerClient:
 
     def get_request_status(
         self, requests_contract: str, request_id: int
-    ) -> tuple[int, bytes, str]:
-        """Get request status, response payload, and rejection reason."""
+    ) -> tuple[int, bytes]:
+        """Get request status and response payload."""
         contract = self.w3.eth.contract(
             address=Web3.to_checksum_address(requests_contract),
             abi=BROKER_REQUESTS_ABI,
         )
 
         request = contract.functions.getRequest(request_id).call()
+        # Returns: (id, requester, nftContract, encryptedPayload, status, responsePayload, submittedAt, respondedAt)
         status = request[4]
         response_payload = request[5]
-        rejection_reason = request[6]
-        return status, response_payload, rejection_reason
+        return status, response_payload
 
     def get_request_id_for_nft(
         self, requests_contract: str, nft_contract: str
@@ -611,7 +590,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     )
     if existing_request_id != 0:
         print(f"NFT contract already has request #{existing_request_id}")
-        status, response_payload, rejection_reason = client.get_request_status(
+        status, response_payload = client.get_request_status(
             broker.requests_contract, existing_request_id
         )
         if status == REQUEST_STATUS_APPROVED:
@@ -620,8 +599,11 @@ def cmd_request(args: argparse.Namespace) -> int:
         elif status == REQUEST_STATUS_PENDING:
             print("Request pending - waiting for response...")
             # Fall through to polling
+        elif status == REQUEST_STATUS_EXPIRED:
+            print("Previous request expired - submitting new request", file=sys.stderr)
+            existing_request_id = 0  # Allow new request
         else:
-            print(f"Previous request rejected: {rejection_reason}", file=sys.stderr)
+            print(f"Previous request not approved (status: {status})", file=sys.stderr)
             return 1
 
     # Generate WireGuard keypair
@@ -659,18 +641,15 @@ def cmd_request(args: argparse.Namespace) -> int:
     print("Waiting for broker response...")
     start_time = time.time()
     while True:
-        status, response_payload, rejection_reason = client.get_request_status(
+        status, response_payload = client.get_request_status(
             broker.requests_contract, request_id
         )
 
         if status == REQUEST_STATUS_APPROVED:
             print("Request approved!")
             break
-        elif status == REQUEST_STATUS_REJECTED:
-            print(f"Request rejected: {rejection_reason}", file=sys.stderr)
-            return 1
         elif status == REQUEST_STATUS_EXPIRED:
-            print("Request expired", file=sys.stderr)
+            print("Request expired (silent rejection or timeout)", file=sys.stderr)
             return 1
 
         elapsed = time.time() - start_time
@@ -759,18 +738,15 @@ def cmd_status(args: argparse.Namespace) -> int:
         if request_id == 0:
             print("\nNo on-chain request found for this NFT contract")
         else:
-            status, _, rejection_reason = client.get_request_status(
+            status, _ = client.get_request_status(
                 args.requests_contract, request_id
             )
             status_names = {
                 REQUEST_STATUS_PENDING: "Pending",
                 REQUEST_STATUS_APPROVED: "Approved",
-                REQUEST_STATUS_REJECTED: "Rejected",
                 REQUEST_STATUS_EXPIRED: "Expired",
             }
             print(f"\nOn-chain request #{request_id}: {status_names.get(status, 'Unknown')}")
-            if rejection_reason:
-                print(f"  Rejection reason: {rejection_reason}")
 
     return 0
 
