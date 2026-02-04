@@ -193,14 +193,13 @@ impl OnchainMonitor {
 
         // Process new requests
         for id in (last_processed + 1)..=count {
-            let request_tuple = self
+            let request = self
                 .contract
                 .get_request(U256::from(id))
                 .call()
                 .await
                 .map_err(|e| MonitorError::Contract(e.to_string()))?;
 
-            let request = RequestData::from(request_tuple);
             let status = RequestStatus::from(request.status);
 
             if status.is_pending() {
