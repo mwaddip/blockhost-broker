@@ -1,0 +1,11 @@
+Package: blockhost-broker-manager
+Version: 0.1.0
+Section: admin
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.11), python3-venv, openssl
+Maintainer: Blockhost <admin@blockhost.io>
+Description: Web management interface for Blockhost Broker
+ Provides a web-based dashboard for managing IPv6 prefix allocations
+ on a Blockhost broker. Features wallet-based authentication and
+ the ability to view and release leases.

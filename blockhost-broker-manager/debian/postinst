@@ -1,0 +1,75 @@
+#!/bin/sh
+set -e
+
+APP_DIR="/opt/blockhost-broker-manager"
+CONFIG_DIR="/etc/blockhost-broker-manager"
+VENV_DIR="$APP_DIR/venv"
+SSL_DIR="$CONFIG_DIR/ssl"
+
+case "$1" in
+    configure)
+        # Create config directory
+        if [ ! -d "$CONFIG_DIR" ]; then
+            mkdir -p "$CONFIG_DIR"
+            chmod 750 "$CONFIG_DIR"
+        fi
+
+        # Create SSL directory
+        if [ ! -d "$SSL_DIR" ]; then
+            mkdir -p "$SSL_DIR"
+            chmod 700 "$SSL_DIR"
+        fi
+
+        # Generate self-signed certificate if not exists
+        if [ ! -f "$SSL_DIR/cert.pem" ] || [ ! -f "$SSL_DIR/key.pem" ]; then
+            echo "Generating self-signed SSL certificate..."
+            openssl req -x509 -newkey rsa:4096 \
+                -keyout "$SSL_DIR/key.pem" \
+                -out "$SSL_DIR/cert.pem" \
+                -days 365 -nodes \
+                -subj "/CN=blockhost-broker-manager/O=Blockhost/C=US" \
+                2>/dev/null
+            chmod 600 "$SSL_DIR/key.pem"
+            chmod 644 "$SSL_DIR/cert.pem"
+        fi
+
+        # Generate secret key if not exists
+        if [ ! -f "$CONFIG_DIR/secret.key" ]; then
+            echo "Generating secret key..."
+            openssl rand -hex 32 > "$CONFIG_DIR/secret.key"
+            chmod 600 "$CONFIG_DIR/secret.key"
+        fi
+
+        # Create virtual environment if not exists
+        if [ ! -d "$VENV_DIR" ]; then
+            echo "Creating Python virtual environment..."
+            python3 -m venv "$VENV_DIR"
+        fi
+
+        # Install/upgrade dependencies
+        echo "Installing Python dependencies..."
+        "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
+        "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt" >/dev/null
+
+        # Reload systemd and enable service
+        systemctl daemon-reload
+        systemctl enable blockhost-broker-manager >/dev/null 2>&1 || true
+
+        echo ""
+        echo "blockhost-broker-manager installed successfully!"
+        echo ""
+        echo "Configuration:"
+        echo "  Config dir: $CONFIG_DIR"
+        echo "  SSL cert:   $SSL_DIR/cert.pem"
+        echo ""
+        echo "To add authorized wallets, edit: $CONFIG_DIR/auth.json"
+        echo ""
+        echo "To start the service:"
+        echo "  sudo systemctl start blockhost-broker-manager"
+        echo ""
+        echo "Web interface will be available at: https://<server-ip>:8443"
+        echo ""
+        ;;
+esac
+
+exit 0

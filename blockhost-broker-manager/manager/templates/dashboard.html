@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Blockhost Broker Manager{% endblock %}
+
+{% block content %}
+<header class="header">
+    <h1>Blockhost Broker Manager</h1>
+    <div class="header-right">
+        <span class="wallet-badge">{{ wallet_address[:6] }}...{{ wallet_address[-4:] }}</span>
+        <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-small">Logout</a>
+    </div>
+</header>
+
+<main class="main-content">
+    <section class="section">
+        <div class="section-header">
+            <h2>Active Leases</h2>
+            <button id="refresh-btn" class="btn btn-secondary btn-small">Refresh</button>
+        </div>
+
+        <div id="leases-container">
+            {% if leases %}
+            <table class="leases-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Prefix</th>
+                        <th>WireGuard Pubkey</th>
+                        <th>NFT Contract</th>
+                        <th>Allocated</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lease in leases %}
+                    <tr data-lease-id="{{ lease.id }}">
+                        <td>{{ lease.id }}</td>
+                        <td><code>{{ lease.prefix }}</code></td>
+                        <td><code class="truncate" title="{{ lease.wg_pubkey }}">{{ lease.wg_pubkey[:20] }}...</code></td>
+                        <td><code class="truncate" title="{{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td>{{ lease.allocated_at[:19] }}</td>
+                        <td>
+                            <button class="btn btn-danger btn-small release-btn" data-lease-id="{{ lease.id }}">
+                                Release
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No active leases</p>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+</main>
+
+<div id="modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Confirm Release</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="modal-message">Are you sure you want to release this lease?</p>
+            <p id="modal-details"></p>
+        </div>
+        <div class="modal-footer">
+            <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+            <button id="modal-confirm" class="btn btn-danger">Release</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalMessage = document.getElementById('modal-message');
+    const modalDetails = document.getElementById('modal-details');
+    const modalCancel = document.getElementById('modal-cancel');
+    const modalConfirm = document.getElementById('modal-confirm');
+    const modalClose = document.querySelector('.modal-close');
+    const toast = document.getElementById('toast');
+
+    let currentLeaseId = null;
+
+    function showToast(message, type = 'info') {
+        toast.textContent = message;
+        toast.className = `toast ${type}`;
+        toast.classList.remove('hidden');
+        setTimeout(() => toast.classList.add('hidden'), 5000);
+    }
+
+    function showModal(leaseId, prefix, nftContract) {
+        currentLeaseId = leaseId;
+        modalTitle.textContent = 'Confirm Release';
+        modalMessage.textContent = `Are you sure you want to release lease #${leaseId}?`;
+        modalDetails.innerHTML = `
+            <strong>Prefix:</strong> ${prefix}<br>
+            <strong>NFT:</strong> ${nftContract}
+        `;
+        modal.classList.remove('hidden');
+    }
+
+    function hideModal() {
+        modal.classList.add('hidden');
+        currentLeaseId = null;
+    }
+
+    async function releaseLease(leaseId) {
+        try {
+            modalConfirm.disabled = true;
+            modalConfirm.textContent = 'Releasing...';
+
+            const response = await fetch(`/api/leases/${leaseId}/release`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                showToast(`Lease released successfully. TX: ${result.tx_hash.slice(0, 10)}...`, 'success');
+                // Remove row from table
+                const row = document.querySelector(`tr[data-lease-id="${leaseId}"]`);
+                if (row) {
+                    row.style.opacity = '0';
+                    setTimeout(() => row.remove(), 300);
+                }
+                // Check if table is now empty
+                setTimeout(() => {
+                    const tbody = document.querySelector('.leases-table tbody');
+                    if (tbody && tbody.children.length === 0) {
+                        location.reload();
+                    }
+                }, 400);
+            } else {
+                showToast(result.message || 'Failed to release lease', 'error');
+            }
+        } catch (e) {
+            showToast('Error: ' + e.message, 'error');
+        } finally {
+            hideModal();
+            modalConfirm.disabled = false;
+            modalConfirm.textContent = 'Release';
+        }
+    }
+
+    // Event listeners
+    document.querySelectorAll('.release-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const leaseId = this.dataset.leaseId;
+            const row = this.closest('tr');
+            const prefix = row.querySelector('td:nth-child(2) code').textContent;
+            const nft = row.querySelector('td:nth-child(4) code').title;
+            showModal(leaseId, prefix, nft);
+        });
+    });
+
+    modalCancel.addEventListener('click', hideModal);
+    modalClose.addEventListener('click', hideModal);
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) hideModal();
+    });
+
+    modalConfirm.addEventListener('click', function() {
+        if (currentLeaseId) {
+            releaseLease(currentLeaseId);
+        }
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', function() {
+        location.reload();
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideModal();
+    });
+});
+</script>
+{% endblock %}

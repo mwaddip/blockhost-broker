@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Blockhost Broker Manager{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-box">
+        <h1>Blockhost Broker Manager</h1>
+        <p class="subtitle">Connect your wallet to continue</p>
+
+        <div id="wallet-status" class="status"></div>
+
+        <button id="connect-btn" class="btn btn-primary btn-large">
+            Connect Wallet
+        </button>
+
+        <div id="signing-status" class="status hidden">
+            <div class="spinner"></div>
+            <span>Please sign the message in your wallet...</span>
+        </div>
+
+        <div id="error-message" class="error hidden"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const connectBtn = document.getElementById('connect-btn');
+    const walletStatus = document.getElementById('wallet-status');
+    const signingStatus = document.getElementById('signing-status');
+    const errorMessage = document.getElementById('error-message');
+
+    function showError(msg) {
+        errorMessage.textContent = msg;
+        errorMessage.classList.remove('hidden');
+        signingStatus.classList.add('hidden');
+        connectBtn.disabled = false;
+    }
+
+    function hideError() {
+        errorMessage.classList.add('hidden');
+    }
+
+    connectBtn.addEventListener('click', async function() {
+        hideError();
+
+        if (typeof window.ethereum === 'undefined') {
+            showError('No Ethereum wallet detected. Please install MetaMask or another Web3 wallet.');
+            return;
+        }
+
+        try {
+            connectBtn.disabled = true;
+
+            // Request account access
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const accounts = await provider.send('eth_requestAccounts', []);
+
+            if (accounts.length === 0) {
+                showError('No accounts found. Please unlock your wallet.');
+                return;
+            }
+
+            const signer = await provider.getSigner();
+            const address = await signer.getAddress();
+
+            walletStatus.textContent = `Connected: ${address.slice(0, 6)}...${address.slice(-4)}`;
+            walletStatus.classList.add('connected');
+
+            // Get nonce from server
+            signingStatus.classList.remove('hidden');
+
+            const nonceResponse = await fetch('/api/auth/nonce', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+
+            if (!nonceResponse.ok) {
+                showError('Failed to get authentication challenge');
+                return;
+            }
+
+            const {nonce, message} = await nonceResponse.json();
+
+            // Sign the message
+            let signature;
+            try {
+                signature = await signer.signMessage(message);
+            } catch (e) {
+                if (e.code === 'ACTION_REJECTED' || e.code === 4001) {
+                    showError('Signature rejected. Please try again.');
+                } else {
+                    showError('Failed to sign message: ' + e.message);
+                }
+                return;
+            }
+
+            // Verify with server
+            const verifyResponse = await fetch('/api/auth/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({nonce, signature})
+            });
+
+            const result = await verifyResponse.json();
+
+            if (verifyResponse.ok && result.success) {
+                // Redirect to dashboard
+                window.location.href = '/dashboard';
+            } else {
+                showError(result.error || 'Authentication failed');
+            }
+
+        } catch (e) {
+            showError('Error: ' + e.message);
+        }
+    });
+});
+</script>
+{% endblock %}
