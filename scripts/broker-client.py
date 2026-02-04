@@ -116,6 +116,15 @@ BROKER_REQUESTS_ABI = [
         "type": "function",
     },
     {
+        "inputs": [
+            {"internalType": "address", "name": "nftContract", "type": "address"},
+        ],
+        "name": "releaseAllocation",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "uint256", "name": "requestId", "type": "uint256"}],
         "name": "getRequest",
         "outputs": [
@@ -393,6 +402,45 @@ class BrokerClient:
             Web3.to_checksum_address(nft_contract)
         ).call()
 
+    def release_allocation(
+        self,
+        account: LocalAccount,
+        requests_contract: str,
+        nft_contract: str,
+    ) -> str:
+        """Release an allocation on-chain. Returns transaction hash."""
+        contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(requests_contract),
+            abi=BROKER_REQUESTS_ABI,
+        )
+
+        # Estimate gas
+        gas_estimate = contract.functions.releaseAllocation(
+            Web3.to_checksum_address(nft_contract),
+        ).estimate_gas({"from": account.address})
+
+        tx = contract.functions.releaseAllocation(
+            Web3.to_checksum_address(nft_contract),
+        ).build_transaction(
+            {
+                "from": account.address,
+                "nonce": self.w3.eth.get_transaction_count(account.address),
+                "gas": gas_estimate + 50000,
+                "maxFeePerGas": self.w3.eth.gas_price * 2,
+                "maxPriorityFeePerGas": self.w3.eth.gas_price,
+                "chainId": self.chain_id,
+            }
+        )
+
+        signed = account.sign_transaction(tx)
+        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        if receipt["status"] != 1:
+            raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
+
+        return tx_hash.hex()
+
 
 def generate_wireguard_keypair() -> tuple[str, str]:
     """Generate WireGuard keypair using wg command."""
@@ -541,6 +589,45 @@ def load_allocation_config(config_dir: Path) -> Optional[AllocationConfig]:
         wg_public_key=data["wg_public_key"],
         allocated_at=data["allocated_at"],
     )
+
+
+def delete_allocation_config(config_dir: Path) -> bool:
+    """Delete allocation configuration file. Returns True if deleted."""
+    config_file = config_dir / "broker-allocation.json"
+    if config_file.exists():
+        config_file.unlink()
+        return True
+    return False
+
+
+def teardown_wireguard(interface: str) -> None:
+    """Tear down WireGuard interface and remove persistent config."""
+    # Stop wg-quick interface
+    subprocess.run(
+        ["wg-quick", "down", interface],
+        capture_output=True,
+    )
+
+    # Also try to remove raw interface (in case not using wg-quick)
+    subprocess.run(
+        ["ip", "link", "del", interface],
+        capture_output=True,
+    )
+
+    # Disable systemd service
+    subprocess.run(
+        ["systemctl", "disable", f"wg-quick@{interface}"],
+        capture_output=True,
+    )
+
+    # Remove wg-quick config file
+    wg_conf = Path(f"/etc/wireguard/{interface}.conf")
+    if wg_conf.exists():
+        try:
+            wg_conf.unlink()
+            print(f"Removed {wg_conf}")
+        except PermissionError:
+            print(f"Warning: Could not remove {wg_conf} (permission denied)", file=sys.stderr)
 
 
 def cmd_request(args: argparse.Namespace) -> int:
@@ -922,6 +1009,106 @@ PersistentKeepalive = 25
     return 0
 
 
+def cmd_release(args: argparse.Namespace) -> int:
+    """Handle release command - release allocation on-chain and clean up locally."""
+    # Load saved config to get NFT contract if not provided
+    config = load_allocation_config(Path(args.config_dir))
+
+    nft_contract = args.nft_contract
+    if not nft_contract and config:
+        nft_contract = config.nft_contract
+        print(f"Using NFT contract from saved config: {nft_contract}")
+
+    if not nft_contract:
+        print("Error: No NFT contract specified and no saved allocation found", file=sys.stderr)
+        print("Use --nft-contract to specify the NFT contract address", file=sys.stderr)
+        return 1
+
+    # Load wallet
+    wallet_key = Path(args.wallet_key).read_text().strip()
+    account = Account.from_key(wallet_key)
+    print(f"Using wallet: {account.address}")
+
+    # Get broker's requests contract
+    requests_contract = args.requests_contract
+    if not requests_contract:
+        # Try to find it from registry
+        if not args.registry_contract:
+            print("Error: No requests contract specified", file=sys.stderr)
+            print("Use --requests-contract or ensure --registry-contract is set", file=sys.stderr)
+            return 1
+
+        client = BrokerClient(
+            rpc_url=args.rpc_url,
+            chain_id=args.chain_id,
+            registry_contract=args.registry_contract,
+        )
+
+        # Find the broker that has this NFT's request
+        brokers = client.get_active_brokers()
+        for broker in brokers:
+            try:
+                request_id = client.get_request_id_for_nft(broker.requests_contract, nft_contract)
+                if request_id != 0:
+                    requests_contract = broker.requests_contract
+                    print(f"Found allocation on broker's contract: {requests_contract}")
+                    break
+            except Exception:
+                continue
+
+        if not requests_contract:
+            print("Error: Could not find which broker has this NFT's allocation", file=sys.stderr)
+            print("Use --requests-contract to specify directly", file=sys.stderr)
+            return 1
+    else:
+        client = BrokerClient(
+            rpc_url=args.rpc_url,
+            chain_id=args.chain_id,
+        )
+
+    # Check if there's an allocation to release
+    request_id = client.get_request_id_for_nft(requests_contract, nft_contract)
+    if request_id == 0:
+        print("No on-chain allocation found for this NFT contract")
+    else:
+        status, _ = client.get_request_status(requests_contract, request_id)
+        status_names = {
+            REQUEST_STATUS_PENDING: "Pending",
+            REQUEST_STATUS_APPROVED: "Approved",
+            REQUEST_STATUS_EXPIRED: "Expired",
+        }
+        print(f"Found request #{request_id} (status: {status_names.get(status, 'Unknown')})")
+
+        # Release on-chain
+        print("Releasing allocation on-chain...")
+        try:
+            tx_hash = client.release_allocation(
+                account=account,
+                requests_contract=requests_contract,
+                nft_contract=nft_contract,
+            )
+            print(f"Release transaction confirmed: {tx_hash}")
+        except Exception as e:
+            print(f"Error releasing on-chain: {e}", file=sys.stderr)
+            if not args.force:
+                print("Use --force to continue with local cleanup anyway", file=sys.stderr)
+                return 1
+
+    # Tear down WireGuard
+    if args.cleanup_wg:
+        print(f"Tearing down WireGuard interface {args.wg_interface}...")
+        teardown_wireguard(args.wg_interface)
+
+    # Delete local config
+    if delete_allocation_config(Path(args.config_dir)):
+        print(f"Deleted local allocation config")
+    else:
+        print("No local allocation config to delete")
+
+    print("Release complete!")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Blockhost Broker Client - Request IPv6 prefix allocations via on-chain authentication"
@@ -1036,6 +1223,39 @@ def main() -> int:
         help="WireGuard interface name (default: wg-broker)",
     )
 
+    # Release command
+    release_parser = subparsers.add_parser(
+        "release", help="Release allocation on-chain and clean up locally"
+    )
+    release_parser.add_argument(
+        "--nft-contract",
+        help="AccessCredentialNFT contract address (uses saved config if not specified)",
+    )
+    release_parser.add_argument(
+        "--wallet-key",
+        required=True,
+        help="Path to wallet private key file",
+    )
+    release_parser.add_argument(
+        "--requests-contract",
+        help="Broker's requests contract (auto-detected from registry if not specified)",
+    )
+    release_parser.add_argument(
+        "--cleanup-wg",
+        action="store_true",
+        help="Also tear down WireGuard interface and remove config",
+    )
+    release_parser.add_argument(
+        "--wg-interface",
+        default="wg-broker",
+        help="WireGuard interface name (default: wg-broker)",
+    )
+    release_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Continue with local cleanup even if on-chain release fails",
+    )
+
     args = parser.parse_args()
 
     # Fetch registry address from remote if not provided
@@ -1059,6 +1279,8 @@ def main() -> int:
         return cmd_configure(args)
     elif args.command == "install":
         return cmd_install(args)
+    elif args.command == "release":
+        return cmd_release(args)
     else:
         parser.print_help()
         return 1
