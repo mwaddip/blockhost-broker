@@ -19,10 +19,10 @@ class Lease:
     id: int
     prefix: str
     prefix_index: int
-    wg_pubkey: str
+    pubkey: str
     nft_contract: str
     allocated_at: str
-    token_id: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 BROKER_REQUESTS_ABI = [
@@ -84,7 +84,7 @@ class BrokerManager:
         try:
             cursor.execute(
                 """
-                SELECT id, prefix, prefix_index, wg_pubkey, token_id, nft_contract, allocated_at
+                SELECT id, prefix, prefix_index, pubkey, nft_contract, allocated_at, endpoint
                 FROM allocations
                 ORDER BY id DESC
                 """
@@ -98,10 +98,10 @@ class BrokerManager:
                         id=row[0],
                         prefix=row[1],
                         prefix_index=row[2],
-                        wg_pubkey=row[3],
-                        token_id=row[4],
-                        nft_contract=row[5],
-                        allocated_at=row[6],
+                        pubkey=row[3],
+                        nft_contract=row[4],
+                        allocated_at=row[5],
+                        endpoint=row[6],
                     )
                 )
             return leases
@@ -119,7 +119,7 @@ class BrokerManager:
 
         try:
             cursor.execute(
-                "SELECT prefix, wg_pubkey, nft_contract FROM allocations WHERE id = ?",
+                "SELECT prefix, pubkey, nft_contract FROM allocations WHERE id = ?",
                 (lease_id,),
             )
             row = cursor.fetchone()
@@ -127,7 +127,7 @@ class BrokerManager:
             if not row:
                 return {"success": False, "message": "Lease not found"}
 
-            prefix, wg_pubkey, nft_contract = row
+            prefix, pubkey, nft_contract = row
 
             # 1. Release on-chain
             try:
@@ -137,7 +137,7 @@ class BrokerManager:
 
             # 2. Remove WireGuard peer
             try:
-                self._remove_wg_peer(wg_pubkey)
+                self._remove_wg_peer(pubkey)
             except Exception as e:
                 # Log but continue - on-chain release succeeded
                 pass

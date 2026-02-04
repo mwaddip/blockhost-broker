@@ -41,19 +41,28 @@ blockhost-broker is a lightweight IPv6 tunnel broker that sub-allocates IPv6 pre
 
 ## Components
 
-### 1. API Server
+### 1. On-Chain Monitor (Primary Mode)
 
-FastAPI-based REST server handling allocation requests.
+The broker primarily operates in on-chain mode, monitoring the blockchain for allocation requests.
+
+**Flow:**
+1. Lazy polls `BrokerRequests.getRequestCount()` every 5 seconds
+2. Fetches new requests via `getRequest(id)`
+3. Verifies NFT contract ownership
+4. Allocates prefix, adds WireGuard peer
+5. Submits encrypted response on-chain
+
+### 2. Internal API Server (Secondary)
+
+Axum-based REST server for local management (127.0.0.1:8080 by default).
 
 **Endpoints:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | /v1/allocate | Request a new /64 allocation |
-| GET | /v1/allocate/{prefix} | Check allocation status |
-| DELETE | /v1/allocate/{prefix} | Release an allocation |
-| GET | /v1/status | Broker status and statistics |
 | GET | /health | Health check endpoint |
+| GET | /api/allocations | List allocations |
+| GET | /api/status | Broker status |
 
 ### 2. IPAM Module
 
@@ -136,28 +145,27 @@ file = "/var/log/blockhost-broker/broker.log"
 ### Database Schema
 
 ```sql
--- Allocations table
+-- Allocations table (on-chain mode uses nft_contract instead of token_hash)
 CREATE TABLE allocations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prefix TEXT UNIQUE NOT NULL,           -- e.g., "2001:db8:abcd:0a00::/64"
-    prefix_index INTEGER UNIQUE NOT NULL,  -- index within /56 (0-255)
+    prefix TEXT UNIQUE NOT NULL,           -- e.g., "2a11:6c7:f04:276::100/120"
+    prefix_index INTEGER UNIQUE NOT NULL,  -- index within upstream prefix
     pubkey TEXT NOT NULL,                  -- WireGuard public key
     endpoint TEXT,                         -- Optional: client endpoint
-    token_hash TEXT NOT NULL,              -- SHA-256 of bearer token
+    nft_contract TEXT NOT NULL,            -- NFT contract address (on-chain auth)
     allocated_at TEXT NOT NULL,            -- ISO 8601 timestamp
-    last_seen_at TEXT,                     -- Last handshake time
-    metadata TEXT                          -- JSON blob for future use
+    last_seen_at TEXT                      -- Last handshake time
 );
 
-CREATE INDEX idx_allocations_token ON allocations(token_hash);
+CREATE INDEX idx_allocations_nft_contract ON allocations(nft_contract);
 CREATE INDEX idx_allocations_pubkey ON allocations(pubkey);
 
--- Tokens table
+-- Tokens table (for legacy/offline mode)
 CREATE TABLE tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token_hash TEXT UNIQUE NOT NULL,       -- SHA-256 of token
     name TEXT,                             -- Human-readable name
-    max_allocations INTEGER DEFAULT 1,     -- Max /64s this token can allocate
+    max_allocations INTEGER DEFAULT 1,     -- Max allocations this token can create
     is_admin BOOLEAN DEFAULT FALSE,        -- Admin privileges
     created_at TEXT NOT NULL,
     expires_at TEXT,                       -- Optional expiration
@@ -170,11 +178,19 @@ CREATE INDEX idx_tokens_hash ON tokens(token_hash);
 CREATE TABLE audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
-    action TEXT NOT NULL,                  -- allocate, release, token_create, etc.
-    token_hash TEXT,
+    action TEXT NOT NULL,                  -- allocate, release, etc.
+    nft_contract TEXT,                     -- NFT contract (on-chain mode)
     prefix TEXT,
     details TEXT                           -- JSON blob
 );
+
+-- State table (for lazy polling)
+CREATE TABLE state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+-- Used to store last_processed_id for request polling
 ```
 
 ---
@@ -402,21 +418,39 @@ All allocation changes logged with timestamp, token hash, and action.
 ### System Requirements
 
 - Linux with WireGuard kernel module
-- Python 3.10+
 - 512MB RAM minimum
 - Static IPv4 address
+- Ethereum wallet with testnet ETH (for on-chain transactions)
 
-### Package Contents
+### Broker Package Contents
 
 ```
-/usr/bin/blockhost-broker           # Main daemon
-/usr/bin/blockhost-broker-ctl       # CLI management tool
-/etc/blockhost-broker/config.toml   # Configuration
-/etc/blockhost-broker/wg-private.key
-/etc/blockhost-broker/wg-public.key
-/var/lib/blockhost-broker/ipam.db   # SQLite database
-/var/log/blockhost-broker/          # Logs
+/usr/bin/blockhost-broker              # Main Rust daemon
+/etc/blockhost-broker/config.toml      # Configuration
+/etc/blockhost-broker/operator.key     # Ethereum operator wallet
+/etc/blockhost-broker/ecies.key        # ECIES encryption key
+/etc/blockhost-broker/wg-private.key   # WireGuard private key
+/var/lib/blockhost-broker/ipam.db      # SQLite database
 /lib/systemd/system/blockhost-broker.service
+```
+
+### Manager Package Contents
+
+```
+/opt/blockhost-broker-manager/         # Python Flask app
+/etc/blockhost-broker-manager/auth.json       # Authorized wallets
+/etc/blockhost-broker-manager/ssl/cert.pem    # Self-signed certificate
+/etc/blockhost-broker-manager/ssl/key.pem
+/lib/systemd/system/blockhost-broker-manager.service
+```
+
+### Client Package Contents
+
+```
+/opt/blockhost-client/broker-client.py    # Python client script
+/opt/blockhost-client/venv/               # Virtual environment
+/usr/bin/broker-client                    # Wrapper script
+/etc/blockhost/                           # Config directory
 ```
 
 ### systemd Service
@@ -613,8 +647,35 @@ poll_interval_ms = 5000
 
 ### Client/Server Separation
 
-- **Server (blockhost-broker package)**: Runs on broker VPS, monitors blockchain, provisions allocations
-- **Client (scripts/broker-client.py)**: Standalone script for Proxmox servers, submits requests, configures WireGuard
+- **Broker Daemon (blockhost-broker)**: Rust service on broker VPS, monitors blockchain, provisions allocations
+- **Broker Manager (blockhost-broker-manager)**: Web UI for broker operators, wallet-based auth, lease management
+- **Broker Client (blockhost-broker-client)**: Python script for Proxmox servers, submits requests, configures WireGuard
+
+### Broker Manager Web Interface
+
+The manager provides a web-based dashboard at `https://<broker-ip>:8443`:
+
+**Authentication:**
+1. User clicks "Connect Wallet"
+2. Server generates unique nonce
+3. User signs nonce with MetaMask
+4. Server verifies signature, checks wallet is in authorized list
+5. Session created with 24-hour expiry
+
+**Features:**
+- View all active leases (prefix, pubkey, NFT contract, timestamp)
+- Release leases (on-chain + WireGuard + database cleanup)
+- Self-signed HTTPS certificate
+
+**Configuration:**
+```json
+// /etc/blockhost-broker-manager/auth.json
+{
+  "authorized_wallets": [
+    "0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9"
+  ]
+}
+```
 
 ---
 
@@ -622,7 +683,7 @@ poll_interval_ms = 5000
 
 1. **Multiple Upstreams** - Failover between tunnel providers
 2. **Usage Metering** - Track bandwidth per allocation
-3. **Web Dashboard** - Visual monitoring interface
+3. ~~**Web Dashboard** - Visual monitoring interface~~ (IMPLEMENTED: blockhost-broker-manager)
 4. ~~**Blockchain Integration** - Tie allocations to on-chain identity~~ (IMPLEMENTED)
 5. **Prefix Delegation** - Support /48 allocations for larger operators
 6. **Geographic Distribution** - Multiple broker instances

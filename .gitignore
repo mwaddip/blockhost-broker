@@ -50,3 +50,4 @@ build-deb/
 # Local notes that might contain sensitive info
 notes.md
 TODO.local.md
+scripts/__pycache__/

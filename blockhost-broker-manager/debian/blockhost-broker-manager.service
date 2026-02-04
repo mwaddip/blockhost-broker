@@ -16,7 +16,7 @@ ExecStart=/opt/blockhost-broker-manager/venv/bin/gunicorn \
     --bind 0.0.0.0:8443 \
     --certfile /etc/blockhost-broker-manager/ssl/cert.pem \
     --keyfile /etc/blockhost-broker-manager/ssl/key.pem \
-    --workers 2 \
+    --workers 1 \
     --chdir /opt/blockhost-broker-manager \
     'manager.app:create_app()'
 

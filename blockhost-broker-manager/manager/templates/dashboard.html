@@ -36,7 +36,7 @@
                     <tr data-lease-id="{{ lease.id }}">
                         <td>{{ lease.id }}</td>
                         <td><code>{{ lease.prefix }}</code></td>
-                        <td><code class="truncate" title="{{ lease.wg_pubkey }}">{{ lease.wg_pubkey[:20] }}...</code></td>
+                        <td><code class="truncate" title="{{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
                         <td><code class="truncate" title="{{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
                         <td>{{ lease.allocated_at[:19] }}</td>
                         <td>

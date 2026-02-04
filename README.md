@@ -140,9 +140,10 @@ path = "/var/lib/blockhost-broker/ipam.db"
 enabled = true
 rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 chain_id = 11155111
-private_key_file = "/etc/blockhost-broker/deployer.key"
+private_key_file = "/etc/blockhost-broker/operator.key"
 ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
-requests_contract = "0x..."
+registry_contract = "0x..."   # BrokerRegistry address
+requests_contract = "0x..."   # This broker's BrokerRequests address
 poll_interval_ms = 5000
 ```
 
@@ -166,6 +167,10 @@ Invalid requests are silently rejected (no on-chain response, request expires).
 ## Contract Addresses (Sepolia Testnet)
 
 - **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
+- **BrokerRequests** (eu-west broker): `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
+
+The registry address is published at:
+https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
 
 ## Smart Contract Deployment
 
@@ -177,6 +182,68 @@ forge build
 forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 ```
 
+## Broker Client
+
+The `broker-client` is a standalone Python script for Proxmox servers to request allocations.
+
+### Installation
+
+```bash
+sudo dpkg -i blockhost-broker-client_0.1.0_all.deb
+```
+
+### Commands
+
+```bash
+# Request a new allocation
+broker-client request --nft-contract 0x... --wallet-key /path/to/key
+
+# Check allocation status
+broker-client status
+
+# List available brokers
+broker-client list-brokers
+
+# Install persistent WireGuard config
+broker-client install
+
+# Release allocation (on-chain + local cleanup)
+broker-client release --wallet-key /path/to/key [--cleanup-wg]
+```
+
+The client fetches the registry address automatically from GitHub.
+
+## Broker Manager (Web UI)
+
+A web-based management interface for broker operators.
+
+### Features
+
+- Wallet-based authentication (MetaMask/Web3)
+- View active leases
+- Release leases with one click
+
+### Installation
+
+```bash
+sudo dpkg -i blockhost-broker-manager_0.1.0_all.deb
+sudo systemctl start blockhost-broker-manager
+```
+
+Access at `https://<broker-ip>:8443` (self-signed certificate).
+
+### Configuration
+
+Authorized wallets: `/etc/blockhost-broker-manager/auth.json`
+
+```json
+{
+  "authorized_wallets": [
+    "0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9"
+  ]
+}
+```
+
 ## Security
 
 - All request/response payloads are ECIES encrypted (secp256k1)
@@ -184,6 +251,7 @@ forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 - NFT ownership verification ensures only legitimate Blockhost installations can request allocations
 - Broker endpoint is only revealed in encrypted responses
 - Silent rejections prevent information leakage about rejection reasons
+- Manager uses wallet-based auth with nonce signing (non-replayable)
 
 ## License
 
