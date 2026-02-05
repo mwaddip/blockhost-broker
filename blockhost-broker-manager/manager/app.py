@@ -5,6 +5,8 @@ import secrets
 from functools import wraps
 from pathlib import Path
 
+from datetime import timedelta
+
 from flask import (
     Flask,
     jsonify,
@@ -23,6 +25,13 @@ app = Flask(__name__, template_folder="templates", static_folder="../static")
 # Configuration - loaded from environment or config file
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
+# Session configuration - match AuthManager.SESSION_EXPIRY
+SESSION_LIFETIME_HOURS = int(os.environ.get("SESSION_LIFETIME_HOURS", "24"))
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=SESSION_LIFETIME_HOURS)
+app.config["SESSION_COOKIE_SECURE"] = True  # HTTPS only
+app.config["SESSION_COOKIE_HTTPONLY"] = True  # No JS access
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # CSRF protection
+
 # Paths
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/etc/blockhost-broker-manager"))
 BROKER_CONFIG_DIR = Path(os.environ.get("BROKER_CONFIG_DIR", "/etc/blockhost-broker"))
@@ -40,6 +49,7 @@ def get_auth_manager() -> AuthManager:
         _auth_manager = AuthManager(
             config_path=CONFIG_DIR / "auth.json",
             secret_key=app.secret_key,
+            session_expiry_hours=SESSION_LIFETIME_HOURS,
         )
     return _auth_manager
 
@@ -175,6 +185,7 @@ def api_verify_signature():
 
     # Create session
     token = auth.create_session(address)
+    session.permanent = True  # Use PERMANENT_SESSION_LIFETIME for cookie expiry
     session["auth_token"] = token
 
     return jsonify({"success": True, "address": address})

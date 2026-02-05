@@ -16,11 +16,11 @@ class AuthManager:
     """Manages wallet-based authentication with nonce-based replay protection."""
 
     NONCE_EXPIRY = 300  # 5 minutes
-    SESSION_EXPIRY = 86400  # 24 hours
 
-    def __init__(self, config_path: Path, secret_key: str):
+    def __init__(self, config_path: Path, secret_key: str, session_expiry_hours: int = 24):
         self.config_path = config_path
         self.secret_key = secret_key.encode()
+        self.session_expiry = session_expiry_hours * 3600  # Convert to seconds
         self._nonces: dict[str, float] = {}  # nonce -> expiry timestamp
         self._sessions: dict[str, tuple[str, float]] = {}  # token -> (address, expiry)
         self._load_config()
@@ -97,7 +97,7 @@ class AuthManager:
     def create_session(self, address: str) -> str:
         """Create a session token for an authenticated address."""
         token = secrets.token_hex(32)
-        expiry = time.time() + self.SESSION_EXPIRY
+        expiry = time.time() + self.session_expiry
         self._sessions[token] = (Web3.to_checksum_address(address), expiry)
         return token
 
