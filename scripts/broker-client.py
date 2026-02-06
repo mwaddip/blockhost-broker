@@ -632,6 +632,17 @@ def teardown_wireguard(interface: str) -> None:
 
 def cmd_request(args: argparse.Namespace) -> int:
     """Handle allocation request command."""
+    # Load server key for ECIES operations
+    server_key_file = Path(args.config_dir) / "server.key"
+    if not server_key_file.exists():
+        print(f"Server key not found at {server_key_file}", file=sys.stderr)
+        print("Run the setup wizard first to generate the server keypair", file=sys.stderr)
+        return 1
+
+    server_key = server_key_file.read_text().strip()
+    ecies_client = ECIESClient(private_key_hex=server_key)
+    print(f"Using server key: {ecies_client.public_key_hex[:16]}...")
+
     # Load wallet
     wallet_key = Path(args.wallet_key).read_text().strip()
     account = Account.from_key(wallet_key)
@@ -688,8 +699,63 @@ def cmd_request(args: argparse.Namespace) -> int:
             broker.requests_contract, existing_request_id
         )
         if status == REQUEST_STATUS_APPROVED:
-            print("Request already approved - use existing allocation")
-            return 0
+            print("Request already approved - recovering allocation...")
+            # Decrypt the existing response using server.key
+            try:
+                response_data = ecies_client.decrypt_json(response_payload)
+                allocation = AllocationResponse(
+                    prefix=response_data["prefix"],
+                    gateway=response_data["gateway"],
+                    broker_pubkey=response_data["brokerPubkey"],
+                    broker_endpoint=response_data["brokerEndpoint"],
+                )
+                print(f"Recovered allocation:")
+                print(f"  Prefix: {allocation.prefix}")
+                print(f"  Gateway: {allocation.gateway}")
+                print(f"  Broker endpoint: {allocation.broker_endpoint}")
+
+                # Load existing config to get WG keys, or generate new ones
+                existing_config = load_allocation_config(Path(args.config_dir))
+                if existing_config and existing_config.nft_contract == args.nft_contract:
+                    wg_private_key = existing_config.wg_private_key
+                    wg_public_key = existing_config.wg_public_key
+                    print("Using existing WireGuard keys from saved config")
+                else:
+                    print("Generating new WireGuard keypair...")
+                    wg_private_key, wg_public_key = generate_wireguard_keypair()
+
+                # Save configuration
+                config = AllocationConfig(
+                    prefix=allocation.prefix,
+                    gateway=allocation.gateway,
+                    broker_pubkey=allocation.broker_pubkey,
+                    broker_endpoint=allocation.broker_endpoint,
+                    nft_contract=args.nft_contract,
+                    request_id=existing_request_id,
+                    wg_private_key=wg_private_key,
+                    wg_public_key=wg_public_key,
+                    allocated_at=datetime.now(timezone.utc).isoformat(),
+                )
+                save_allocation_config(Path(args.config_dir), config)
+
+                # Configure WireGuard if requested
+                if args.configure_wg:
+                    print("Configuring WireGuard tunnel...")
+                    configure_wireguard(
+                        interface=args.wg_interface,
+                        private_key=wg_private_key,
+                        prefix=allocation.prefix,
+                        gateway=allocation.gateway,
+                        broker_pubkey=allocation.broker_pubkey,
+                        broker_endpoint=allocation.broker_endpoint,
+                    )
+
+                print("Allocation recovered!")
+                return 0
+            except Exception as e:
+                print(f"Failed to decrypt existing response: {e}", file=sys.stderr)
+                print("The request may have been made with a different key", file=sys.stderr)
+                return 1
         elif status == REQUEST_STATUS_PENDING:
             print("Request pending - waiting for response...")
             # Fall through to polling
@@ -703,9 +769,6 @@ def cmd_request(args: argparse.Namespace) -> int:
     # Generate WireGuard keypair
     print("Generating WireGuard keypair...")
     wg_private_key, wg_public_key = generate_wireguard_keypair()
-
-    # Generate ECIES keypair for response encryption
-    ecies_client = ECIESClient()
 
     if existing_request_id == 0:
         # Build request payload
