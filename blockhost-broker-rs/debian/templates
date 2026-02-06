@@ -128,6 +128,19 @@ Description: Public endpoint (hostname:port)
  Format: hostname:port or ip:port
  Example: broker.example.com:51820
 
+Template: blockhost-broker/upstream-interface
+Type: string
+Description: Upstream network interface for NDP proxy
+ Enter the upstream network interface name for NDP proxy.
+ .
+ This is the interface connected to your IPv6 provider (e.g., sit1 for a
+ SIT tunnel, he-ipv6 for Hurricane Electric, or eth0 for native IPv6).
+ .
+ NDP proxy entries will be added on this interface so that your provider
+ can route traffic to allocated client addresses.
+ .
+ Leave blank to skip NDP proxy configuration.
+
 Template: blockhost-broker/setup-complete
 Type: note
 Description: Setup complete

@@ -24,6 +24,11 @@ private_key_file = "/etc/blockhost-broker/wg-private.key"
 # Public endpoint for clients to connect to
 public_endpoint = "your-server.example.com:51820"
 
+# Upstream interface for NDP proxy (e.g., sit1, he-ipv6, eth0)
+# If set, NDP proxy entries will be added/removed when peers are added/removed.
+# This allows your provider to route traffic to allocated client addresses.
+# upstream_interface = "sit1"
+
 [api]
 # API listen address (internal management only)
 listen_host = "127.0.0.1"

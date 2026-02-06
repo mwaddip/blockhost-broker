@@ -111,6 +111,12 @@ impl WireGuardManager {
             &self.config.interface,
         ]);
 
+        // Add NDP proxy entry for the client's first address (e.g., ::701 for ::700/120)
+        if let Some(ref upstream_if) = self.config.upstream_interface {
+            let client_addr = Self::first_client_address(allowed_ips);
+            self.add_ndp_proxy(&client_addr, upstream_if);
+        }
+
         info!(
             pubkey = %pubkey,
             allowed_ips = %allowed_ips,
@@ -122,9 +128,10 @@ impl WireGuardManager {
 
     /// Remove a WireGuard peer.
     pub fn remove_peer(&self, pubkey: &str) -> Result<(), WireGuardError> {
-        // Get peer's allowed IPs first for route cleanup
+        // Get peer's allowed IPs first for route and NDP proxy cleanup
         if let Some(status) = self.get_peer_status(pubkey)? {
             for allowed_ip in &status.allowed_ips {
+                // Remove route
                 let _ = self.run_command_best_effort(&[
                     "ip",
                     "-6",
@@ -134,6 +141,14 @@ impl WireGuardManager {
                     "dev",
                     &self.config.interface,
                 ]);
+
+                // Remove NDP proxy entry
+                if let Some(ref upstream_if) = self.config.upstream_interface {
+                    if let Ok(prefix) = allowed_ip.parse::<Ipv6Net>() {
+                        let client_addr = Self::first_client_address(&prefix);
+                        self.remove_ndp_proxy(&client_addr, upstream_if);
+                    }
+                }
             }
         }
 
@@ -239,6 +254,55 @@ impl WireGuardManager {
         info!(path = %config_path, "Saved WireGuard config");
 
         Ok(())
+    }
+
+    /// Calculate the first usable client address in a prefix.
+    /// For example, ::700/120 -> ::701
+    fn first_client_address(prefix: &Ipv6Net) -> String {
+        use std::net::Ipv6Addr;
+        let network_addr: u128 = prefix.network().into();
+        let first_addr = Ipv6Addr::from(network_addr + 1);
+        first_addr.to_string()
+    }
+
+    /// Add an NDP proxy entry for a client address.
+    fn add_ndp_proxy(&self, addr: &str, upstream_interface: &str) {
+        let result = self.run_command_best_effort(&[
+            "ip",
+            "-6",
+            "neigh",
+            "add",
+            "proxy",
+            addr,
+            "dev",
+            upstream_interface,
+        ]);
+
+        match result {
+            Some(_) => {
+                info!(addr = %addr, interface = %upstream_interface, "Added NDP proxy entry");
+            }
+            None => {
+                // Entry might already exist, which is fine
+                debug!(addr = %addr, interface = %upstream_interface, "NDP proxy entry may already exist");
+            }
+        }
+    }
+
+    /// Remove an NDP proxy entry for a client address.
+    fn remove_ndp_proxy(&self, addr: &str, upstream_interface: &str) {
+        let _ = self.run_command_best_effort(&[
+            "ip",
+            "-6",
+            "neigh",
+            "del",
+            "proxy",
+            addr,
+            "dev",
+            upstream_interface,
+        ]);
+
+        debug!(addr = %addr, interface = %upstream_interface, "Removed NDP proxy entry");
     }
 }
 

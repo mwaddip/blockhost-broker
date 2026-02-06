@@ -27,6 +27,47 @@ case "$1" in
             chmod 750 "$DATA_DIR"
         fi
 
+        # Configure sysctl for IPv6 forwarding and NDP proxy
+        SYSCTL_CONF="/etc/sysctl.d/99-blockhost-broker.conf"
+        if [ ! -f "$SYSCTL_CONF" ]; then
+            cat > "$SYSCTL_CONF" << 'SYSCTL_EOF'
+# Blockhost Broker - IPv6 forwarding and NDP proxy settings
+# Enable IPv6 forwarding (required for routing traffic between interfaces)
+net.ipv6.conf.all.forwarding = 1
+
+# Enable NDP proxy (required for upstream to reach client addresses)
+net.ipv6.conf.all.proxy_ndp = 1
+SYSCTL_EOF
+            echo "Created sysctl configuration at $SYSCTL_CONF"
+        fi
+
+        # Apply sysctl settings
+        sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || true
+
+        # Configure UFW rules if UFW is installed and active
+        if command -v ufw >/dev/null 2>&1; then
+            # Get WireGuard interface and port from debconf or defaults
+            db_get blockhost-broker/wg-interface
+            UFW_WG_IFACE="${RET:-wg-broker}"
+            db_get blockhost-broker/wg-port
+            UFW_WG_PORT="${RET:-51820}"
+            db_get blockhost-broker/upstream-interface
+            UFW_UPSTREAM="${RET}"
+
+            # Allow WireGuard UDP port
+            ufw allow "${UFW_WG_PORT}/udp" comment "Blockhost WireGuard" >/dev/null 2>&1 || true
+
+            # If upstream interface is specified, add forwarding rules
+            if [ -n "$UFW_UPSTREAM" ]; then
+                # Allow forwarding between WireGuard and upstream interfaces
+                ufw route allow in on "$UFW_WG_IFACE" out on "$UFW_UPSTREAM" comment "Blockhost forward WG->upstream" >/dev/null 2>&1 || true
+                ufw route allow in on "$UFW_UPSTREAM" out on "$UFW_WG_IFACE" comment "Blockhost forward upstream->WG" >/dev/null 2>&1 || true
+                echo "Configured UFW forwarding rules for $UFW_WG_IFACE <-> $UFW_UPSTREAM"
+            fi
+
+            echo "Configured UFW to allow WireGuard on port $UFW_WG_PORT/udp"
+        fi
+
         # Handle private key setup
         db_get blockhost-broker/private-key-action
         KEY_ACTION="$RET"
@@ -101,6 +142,9 @@ case "$1" in
 
         db_get blockhost-broker/wg-endpoint
         WG_ENDPOINT="$RET"
+
+        db_get blockhost-broker/upstream-interface
+        UPSTREAM_INTERFACE="$RET"
 
         # Handle contract deployment
         REQUESTS_CONTRACT=""
@@ -186,6 +230,12 @@ EOF
             fi
 
             echo "poll_interval_ms = 5000" >> "$CONFIG_FILE"
+
+            # Add upstream_interface if specified (for NDP proxy)
+            if [ -n "$UPSTREAM_INTERFACE" ]; then
+                # Insert after [wireguard] section's public_endpoint line
+                sed -i "/^public_endpoint = /a upstream_interface = \"$UPSTREAM_INTERFACE\"" "$CONFIG_FILE"
+            fi
 
             chmod 640 "$CONFIG_FILE"
             echo "Configuration written to $CONFIG_FILE"

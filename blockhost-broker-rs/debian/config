@@ -74,6 +74,10 @@ case "$1" in
         db_input high blockhost-broker/wg-endpoint || true
         db_go || true
 
+        # Step 3.5: Upstream interface for NDP proxy
+        db_input medium blockhost-broker/upstream-interface || true
+        db_go || true
+
         # Step 4: Contract deployment decision
         db_input high blockhost-broker/deploy-contract || true
         db_go || true

@@ -144,6 +144,10 @@ pub struct WireGuardConfig {
 
     /// Public endpoint for clients to connect to.
     pub public_endpoint: String,
+
+    /// Upstream interface for NDP proxy (e.g., tunnel interface to provider).
+    /// If set, NDP proxy entries will be added/removed when peers are added/removed.
+    pub upstream_interface: Option<String>,
 }
 
 impl Default for WireGuardConfig {
@@ -153,6 +157,7 @@ impl Default for WireGuardConfig {
             listen_port: 51820,
             private_key_file: PathBuf::from("/etc/blockhost-broker/wg-private.key"),
             public_endpoint: "127.0.0.1:51820".to_string(),
+            upstream_interface: None,
         }
     }
 }
