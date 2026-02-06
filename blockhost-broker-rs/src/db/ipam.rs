@@ -345,6 +345,55 @@ impl Ipam {
         Ok(())
     }
 
+    /// Update the WireGuard public key for an existing allocation.
+    /// Returns the updated allocation.
+    pub async fn update_allocation_pubkey(
+        &self,
+        nft_contract: &str,
+        new_pubkey: &str,
+        endpoint: Option<&str>,
+    ) -> Result<Allocation, IpamError> {
+        let nft_contract_lower = nft_contract.to_lowercase();
+
+        // Get existing allocation
+        let allocation = self
+            .get_allocation_by_nft_contract(&nft_contract_lower)
+            .await?
+            .ok_or(IpamError::AllocationNotFound)?;
+
+        // Update the pubkey
+        sqlx::query(
+            "UPDATE allocations SET pubkey = ?, endpoint = ? WHERE nft_contract = ?",
+        )
+        .bind(new_pubkey)
+        .bind(endpoint)
+        .bind(&nft_contract_lower)
+        .execute(&self.pool)
+        .await?;
+
+        self.audit(
+            "update_pubkey",
+            Some(&nft_contract_lower),
+            Some(&allocation.prefix.to_string()),
+            &format!(r#"{{"old_pubkey":"{}","new_pubkey":"{}"}}"#, allocation.pubkey, new_pubkey),
+        )
+        .await?;
+
+        info!(
+            prefix = %allocation.prefix,
+            old_pubkey = %allocation.pubkey,
+            new_pubkey = %new_pubkey,
+            "Updated allocation pubkey"
+        );
+
+        // Return updated allocation
+        Ok(Allocation {
+            pubkey: new_pubkey.to_string(),
+            endpoint: endpoint.map(String::from),
+            ..allocation
+        })
+    }
+
     /// Get allocation statistics.
     pub async fn get_stats(&self) -> Result<AllocationStats, IpamError> {
         let upstream_bits = 128 - self.config.upstream_prefix.prefix_len();

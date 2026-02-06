@@ -257,46 +257,85 @@ impl OnchainMonitor {
             .encryption
             .decrypt_request_payload(&request.encrypted_payload)?;
 
-        // Allocate prefix using IPAM
-        let ipam = self.ipam.lock().await;
-        let allocation = match ipam
-            .allocate(
-                &payload.wg_pubkey,
-                &format!("{:?}", request.nft_contract),
-                None,
-            )
-            .await
-        {
-            Ok(alloc) => alloc,
-            Err(crate::db::ipam::IpamError::PubkeyAlreadyAllocated) => {
-                warn!(
-                    request_id = request.id,
-                    "WireGuard pubkey already has allocation"
-                );
-                return Ok(()); // Silent rejection
-            }
-            Err(crate::db::ipam::IpamError::NoPrefixesAvailable) => {
-                error!(request_id = request.id, "No prefixes available");
-                return Ok(()); // Silent rejection
-            }
-            Err(e) => return Err(e.into()),
-        };
-        drop(ipam);
+        let nft_contract_str = format!("{:?}", request.nft_contract);
 
-        // Add WireGuard peer
-        if let Err(e) = self.wg.add_peer(&payload.wg_pubkey, &allocation.prefix, None) {
-            error!(
+        // Check if this NFT contract already has an allocation
+        let ipam = self.ipam.lock().await;
+        let existing_allocation = ipam
+            .get_allocation_by_nft_contract(&nft_contract_str)
+            .await?;
+
+        let allocation = if let Some(existing) = existing_allocation {
+            // Re-request from the same NFT contract - update pubkey and re-send same allocation
+            info!(
                 request_id = request.id,
-                error = %e,
-                "Failed to add WireGuard peer"
+                prefix = %existing.prefix,
+                old_pubkey = %existing.pubkey,
+                new_pubkey = %payload.wg_pubkey,
+                "Re-request from existing allocation, updating pubkey"
             );
-            // Rollback allocation
-            let ipam = self.ipam.lock().await;
-            let _ = ipam
-                .release(&allocation.prefix.to_string(), &format!("{:?}", request.nft_contract))
-                .await;
-            return Err(e.into());
-        }
+
+            // Update the pubkey in the database
+            let updated = ipam
+                .update_allocation_pubkey(&nft_contract_str, &payload.wg_pubkey, None)
+                .await?;
+            drop(ipam);
+
+            // Remove old WireGuard peer and add new one
+            let _ = self.wg.remove_peer(&existing.pubkey);
+            if let Err(e) = self.wg.add_peer(&payload.wg_pubkey, &updated.prefix, None) {
+                error!(
+                    request_id = request.id,
+                    error = %e,
+                    "Failed to add WireGuard peer for re-request"
+                );
+                return Err(e.into());
+            }
+
+            updated
+        } else {
+            // New allocation
+            let allocation = match ipam
+                .allocate(
+                    &payload.wg_pubkey,
+                    &nft_contract_str,
+                    None,
+                )
+                .await
+            {
+                Ok(alloc) => alloc,
+                Err(crate::db::ipam::IpamError::PubkeyAlreadyAllocated) => {
+                    warn!(
+                        request_id = request.id,
+                        "WireGuard pubkey already has allocation"
+                    );
+                    return Ok(()); // Silent rejection
+                }
+                Err(crate::db::ipam::IpamError::NoPrefixesAvailable) => {
+                    error!(request_id = request.id, "No prefixes available");
+                    return Ok(()); // Silent rejection
+                }
+                Err(e) => return Err(e.into()),
+            };
+            drop(ipam);
+
+            // Add WireGuard peer
+            if let Err(e) = self.wg.add_peer(&payload.wg_pubkey, &allocation.prefix, None) {
+                error!(
+                    request_id = request.id,
+                    error = %e,
+                    "Failed to add WireGuard peer"
+                );
+                // Rollback allocation
+                let ipam = self.ipam.lock().await;
+                let _ = ipam
+                    .release(&allocation.prefix.to_string(), &nft_contract_str)
+                    .await;
+                return Err(e.into());
+            }
+
+            allocation
+        };
 
         // Get broker WireGuard public key
         let wg_pubkey = match self.wg.get_public_key() {
@@ -307,7 +346,7 @@ impl OnchainMonitor {
                 let _ = self.wg.remove_peer(&payload.wg_pubkey);
                 let ipam = self.ipam.lock().await;
                 let _ = ipam
-                    .release(&allocation.prefix.to_string(), &format!("{:?}", request.nft_contract))
+                    .release(&allocation.prefix.to_string(), &nft_contract_str)
                     .await;
                 return Ok(()); // Silent rejection
             }
@@ -321,7 +360,7 @@ impl OnchainMonitor {
             broker_endpoint: self.wg_config.public_endpoint.clone(),
         };
 
-        // Encrypt response for the server
+        // Encrypt response for the server's new key
         let encrypted_response = match self
             .encryption
             .encrypt_response_payload(&response, &payload.server_pubkey)
@@ -337,7 +376,7 @@ impl OnchainMonitor {
                 let _ = self.wg.remove_peer(&payload.wg_pubkey);
                 let ipam = self.ipam.lock().await;
                 let _ = ipam
-                    .release(&allocation.prefix.to_string(), &format!("{:?}", request.nft_contract))
+                    .release(&allocation.prefix.to_string(), &nft_contract_str)
                     .await;
                 return Err(e.into());
             }
