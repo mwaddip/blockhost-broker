@@ -111,10 +111,9 @@ impl WireGuardManager {
             &self.config.interface,
         ]);
 
-        // Add NDP proxy entry for the client's first address (e.g., ::701 for ::700/120)
+        // Add NDP proxy entries for all addresses in the prefix
         if let Some(ref upstream_if) = self.config.upstream_interface {
-            let client_addr = Self::first_client_address(allowed_ips);
-            self.add_ndp_proxy(&client_addr, upstream_if);
+            self.add_ndp_proxy_for_prefix(allowed_ips, upstream_if);
         }
 
         info!(
@@ -142,11 +141,10 @@ impl WireGuardManager {
                     &self.config.interface,
                 ]);
 
-                // Remove NDP proxy entry
+                // Remove NDP proxy entries for the prefix
                 if let Some(ref upstream_if) = self.config.upstream_interface {
                     if let Ok(prefix) = allowed_ip.parse::<Ipv6Net>() {
-                        let client_addr = Self::first_client_address(&prefix);
-                        self.remove_ndp_proxy(&client_addr, upstream_if);
+                        self.remove_ndp_proxy_for_prefix(&prefix, upstream_if);
                     }
                 }
             }
@@ -256,53 +254,92 @@ impl WireGuardManager {
         Ok(())
     }
 
-    /// Calculate the first usable client address in a prefix.
-    /// For example, ::700/120 -> ::701
-    fn first_client_address(prefix: &Ipv6Net) -> String {
+    /// Maximum number of NDP proxy entries to add per allocation.
+    /// For /120 (256 addresses) or smaller, we add entries for all.
+    /// For larger prefixes, we limit to avoid overwhelming the neighbor table.
+    const MAX_NDP_PROXY_ENTRIES: u32 = 256;
+
+    /// Calculate all usable addresses in a prefix (up to MAX_NDP_PROXY_ENTRIES).
+    /// Skips the network address (e.g., ::700) and returns ::701, ::702, etc.
+    fn prefix_addresses(prefix: &Ipv6Net) -> Vec<std::net::Ipv6Addr> {
         use std::net::Ipv6Addr;
+
+        let prefix_len = prefix.prefix_len();
+        let host_bits = 128 - prefix_len;
+
+        // Calculate number of addresses in the prefix
+        let num_addresses: u128 = if host_bits >= 128 {
+            u128::MAX
+        } else {
+            1u128 << host_bits
+        };
+
+        // Limit to MAX_NDP_PROXY_ENTRIES
+        let count = std::cmp::min(num_addresses, Self::MAX_NDP_PROXY_ENTRIES as u128) as u32;
+
         let network_addr: u128 = prefix.network().into();
-        let first_addr = Ipv6Addr::from(network_addr + 1);
-        first_addr.to_string()
-    }
+        let mut addresses = Vec::with_capacity(count as usize);
 
-    /// Add an NDP proxy entry for a client address.
-    fn add_ndp_proxy(&self, addr: &str, upstream_interface: &str) {
-        let result = self.run_command_best_effort(&[
-            "ip",
-            "-6",
-            "neigh",
-            "add",
-            "proxy",
-            addr,
-            "dev",
-            upstream_interface,
-        ]);
-
-        match result {
-            Some(_) => {
-                info!(addr = %addr, interface = %upstream_interface, "Added NDP proxy entry");
-            }
-            None => {
-                // Entry might already exist, which is fine
-                debug!(addr = %addr, interface = %upstream_interface, "NDP proxy entry may already exist");
-            }
+        // Start from 1 (skip network address) up to count
+        for i in 1..=count {
+            addresses.push(Ipv6Addr::from(network_addr + i as u128));
         }
+
+        addresses
     }
 
-    /// Remove an NDP proxy entry for a client address.
-    fn remove_ndp_proxy(&self, addr: &str, upstream_interface: &str) {
-        let _ = self.run_command_best_effort(&[
-            "ip",
-            "-6",
-            "neigh",
-            "del",
-            "proxy",
-            addr,
-            "dev",
-            upstream_interface,
-        ]);
+    /// Add NDP proxy entries for all addresses in a prefix.
+    fn add_ndp_proxy_for_prefix(&self, prefix: &Ipv6Net, upstream_interface: &str) {
+        let addresses = Self::prefix_addresses(prefix);
+        let count = addresses.len();
 
-        debug!(addr = %addr, interface = %upstream_interface, "Removed NDP proxy entry");
+        for addr in addresses {
+            let addr_str = addr.to_string();
+            let _ = self.run_command_best_effort(&[
+                "ip",
+                "-6",
+                "neigh",
+                "add",
+                "proxy",
+                &addr_str,
+                "dev",
+                upstream_interface,
+            ]);
+        }
+
+        info!(
+            prefix = %prefix,
+            count = count,
+            interface = %upstream_interface,
+            "Added NDP proxy entries for prefix"
+        );
+    }
+
+    /// Remove NDP proxy entries for all addresses in a prefix.
+    fn remove_ndp_proxy_for_prefix(&self, prefix: &Ipv6Net, upstream_interface: &str) {
+        let addresses = Self::prefix_addresses(prefix);
+        let count = addresses.len();
+
+        for addr in addresses {
+            let addr_str = addr.to_string();
+            let _ = self.run_command_best_effort(&[
+                "ip",
+                "-6",
+                "neigh",
+                "del",
+                "proxy",
+                &addr_str,
+                "dev",
+                upstream_interface,
+            ]);
+        }
+
+        debug!(
+            prefix = %prefix,
+            count = count,
+            interface = %upstream_interface,
+            "Removed NDP proxy entries for prefix"
+        );
     }
 }
 
