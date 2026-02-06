@@ -25,6 +25,32 @@ class Lease:
     endpoint: Optional[str] = None
 
 
+@dataclass
+class WalletInfo:
+    """Broker operator wallet information."""
+
+    address: str
+    balance_wei: int
+    balance_eth: float
+    chain_id: int
+    network_name: str
+    low_balance: bool  # True if below threshold
+
+
+# Chain ID to network name mapping
+CHAIN_NAMES = {
+    1: "Ethereum Mainnet",
+    11155111: "Sepolia Testnet",
+    5: "Goerli Testnet",
+    137: "Polygon",
+    80001: "Mumbai Testnet",
+    42161: "Arbitrum One",
+    10: "Optimism",
+}
+
+LOW_BALANCE_THRESHOLD_WEI = 50000000000000000  # 0.05 ETH
+
+
 BROKER_REQUESTS_ABI = [
     {
         "inputs": [{"internalType": "address", "name": "nftContract", "type": "address"}],
@@ -72,6 +98,22 @@ class BrokerManager:
         """Load operator wallet from key file."""
         key = self.operator_key_path.read_text().strip()
         return Account.from_key(key)
+
+    def get_wallet_info(self) -> WalletInfo:
+        """Get operator wallet address and balance."""
+        account = self._get_operator_account()
+        balance_wei = self.w3.eth.get_balance(account.address)
+        balance_eth = balance_wei / 10**18
+        network_name = CHAIN_NAMES.get(self.chain_id, f"Chain {self.chain_id}")
+
+        return WalletInfo(
+            address=account.address,
+            balance_wei=balance_wei,
+            balance_eth=balance_eth,
+            chain_id=self.chain_id,
+            network_name=network_name,
+            low_balance=balance_wei < LOW_BALANCE_THRESHOLD_WEI,
+        )
 
     def get_leases(self) -> list[Lease]:
         """Get all current leases from the broker database."""

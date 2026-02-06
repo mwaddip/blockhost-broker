@@ -12,6 +12,34 @@
 </header>
 
 <main class="main-content">
+    <section class="wallet-info-section {% if wallet_info.low_balance %}low-balance{% endif %}">
+        <div class="wallet-info">
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Operator Wallet</span>
+                <code class="wallet-info-value" title="{{ wallet_info.address }}">{{ wallet_info.address[:10] }}...{{ wallet_info.address[-8:] }}</code>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Balance</span>
+                <span class="wallet-info-value balance {% if wallet_info.low_balance %}warning{% endif %}" id="current-balance">
+                    {{ "%.4f"|format(wallet_info.balance_eth) }} ETH
+                    {% if wallet_info.low_balance %}<span class="warning-icon" title="Low balance - may not be able to process transactions">&#9888;</span>{% endif %}
+                </span>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Network</span>
+                <span class="wallet-info-value">{{ wallet_info.network_name }}</span>
+            </div>
+            <div class="wallet-info-item send-eth-form">
+                <span class="wallet-info-label">Top Up</span>
+                <div class="send-eth-input-group">
+                    <input type="number" id="send-eth-amount" placeholder="0.00" step="0.01" min="0.01" max="10">
+                    <button id="send-eth-btn" class="btn btn-primary btn-small">Send ETH</button>
+                </div>
+            </div>
+        </div>
+        <input type="hidden" id="broker-wallet-address" value="{{ wallet_info.address }}">
+        <input type="hidden" id="broker-chain-id" value="{{ wallet_info.chain_id }}">
+    </section>
     <section class="section">
         <div class="section-header">
             <h2>Active Leases</h2>
@@ -183,6 +211,78 @@ document.addEventListener('DOMContentLoaded', function() {
     // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') hideModal();
+    });
+
+    // Send ETH functionality
+    const sendEthBtn = document.getElementById('send-eth-btn');
+    const sendEthAmount = document.getElementById('send-eth-amount');
+    const brokerAddress = document.getElementById('broker-wallet-address').value;
+    const brokerChainId = parseInt(document.getElementById('broker-chain-id').value);
+
+    sendEthBtn.addEventListener('click', async function() {
+        const amount = parseFloat(sendEthAmount.value);
+        if (!amount || amount <= 0) {
+            showToast('Please enter a valid amount', 'error');
+            return;
+        }
+
+        if (!window.ethereum) {
+            showToast('MetaMask not detected', 'error');
+            return;
+        }
+
+        try {
+            sendEthBtn.disabled = true;
+            sendEthBtn.textContent = 'Sending...';
+
+            // Request account access
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+
+            // Check network
+            const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+            const currentChainId = parseInt(chainIdHex, 16);
+
+            if (currentChainId !== brokerChainId) {
+                showToast(`Please switch to the correct network (Chain ID: ${brokerChainId})`, 'error');
+                return;
+            }
+
+            // Convert ETH to wei (hex)
+            const weiValue = BigInt(Math.round(amount * 1e18)).toString(16);
+
+            // Send transaction
+            const txHash = await window.ethereum.request({
+                method: 'eth_sendTransaction',
+                params: [{
+                    from: accounts[0],
+                    to: brokerAddress,
+                    value: '0x' + weiValue,
+                }],
+            });
+
+            showToast(`Transaction sent: ${txHash.slice(0, 10)}...`, 'success');
+            sendEthAmount.value = '';
+
+            // Refresh page after a delay to show updated balance
+            setTimeout(() => location.reload(), 5000);
+
+        } catch (e) {
+            if (e.code === 4001) {
+                showToast('Transaction rejected', 'error');
+            } else {
+                showToast('Error: ' + (e.message || e), 'error');
+            }
+        } finally {
+            sendEthBtn.disabled = false;
+            sendEthBtn.textContent = 'Send ETH';
+        }
+    });
+
+    // Allow Enter key to submit
+    sendEthAmount.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            sendEthBtn.click();
+        }
     });
 });
 </script>

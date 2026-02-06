@@ -140,10 +140,12 @@ def dashboard():
     """Main dashboard showing leases."""
     broker = get_broker_manager()
     leases = broker.get_leases()
+    wallet_info = broker.get_wallet_info()
     return render_template(
         "dashboard.html",
         leases=leases,
         wallet_address=request.wallet_address,
+        wallet_info=wallet_info,
     )
 
 
