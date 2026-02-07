@@ -128,6 +128,7 @@ interface = "wg-broker"
 listen_port = 51820
 private_key_file = "/etc/blockhost-broker/wg-private.key"
 public_endpoint = "your-server.example.com:51820"
+upstream_interface = "sit1"  # For NDP proxy (e.g., sit1, tb25255R64)
 
 [api]
 listen_host = "127.0.0.1"
@@ -163,6 +164,8 @@ poll_interval_ms = 5000
 10. **Client** decrypts response, configures WireGuard
 
 Invalid requests are silently rejected (no on-chain response, request expires).
+
+**Re-requests:** If a client submits a new request from the same NFT contract, the broker updates the WireGuard public key and returns the same allocation. This allows key rotation without losing the allocated prefix.
 
 ## Contract Addresses (Sepolia Testnet)
 
@@ -220,8 +223,11 @@ A web-based management interface for broker operators.
 ### Features
 
 - Wallet-based authentication (MetaMask/Web3)
+- Configurable session expiry (default: 1 hour, set via `SESSION_LIFETIME_HOURS`)
 - View active leases
 - Release leases with one click
+- Wallet info display (address, balance, network) with low-balance warning
+- ETH top-up via MetaMask integration
 
 ### Installation
 
@@ -243,6 +249,19 @@ Authorized wallets: `/etc/blockhost-broker-manager/auth.json`
   ]
 }
 ```
+
+## NDP Proxy
+
+When using a tunnel provider that expects NDP for address resolution (like Route64 SIT tunnels), the broker automatically manages NDP proxy entries:
+
+- Adds proxy entries for all addresses in allocated prefixes (up to 256 per allocation)
+- Removes entries when allocations are released
+- Requires `upstream_interface` to be set in config
+
+The Debian package automatically configures:
+- `net.ipv6.conf.all.forwarding = 1`
+- `net.ipv6.conf.all.proxy_ndp = 1`
+- UFW rules for WireGuard port and interface forwarding
 
 ## Security
 

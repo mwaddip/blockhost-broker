@@ -21,7 +21,7 @@ blockhost-broker is a lightweight IPv6 tunnel broker that sub-allocates IPv6 pre
 │                   blockhost-broker                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │
 │  │  API Server │  │    IPAM     │  │ WireGuard Mgmt  │  │
-│  │  (FastAPI)  │◄─┤  (SQLite)   │◄─┤   (wg tools)    │  │
+│  │   (Axum)    │◄─┤  (SQLite)   │◄─┤   (wg tools)    │  │
 │  └──────┬──────┘  └─────────────┘  └────────┬────────┘  │
 │         │                                    │          │
 │         └──────────► REST API ◄──────────────┘          │
@@ -123,6 +123,10 @@ private_key_file = "/etc/blockhost-broker/wg-private.key"
 
 # Public endpoint for clients to connect to
 public_endpoint = "198.51.100.1:51820"
+
+# Upstream interface for NDP proxy (e.g., sit1, tb25255R64)
+# Required when tunnel provider expects NDP for address resolution
+upstream_interface = "tb25255R64"
 
 [api]
 # Listen address
@@ -311,6 +315,59 @@ Health check (no authentication required).
 
 ---
 
+## NDP Proxy Management
+
+When using tunnel providers like Route64 that expect NDP for address resolution within the allocated /64, the broker must advertise client addresses via NDP proxy.
+
+### How It Works
+
+1. When a peer is added, the broker adds NDP proxy entries for all addresses in the allocated prefix (up to 256 addresses for /120 allocations)
+2. When a peer is removed, the corresponding NDP proxy entries are cleaned up
+3. The upstream router sees the addresses as "on-link" and routes traffic to the broker
+
+### Configuration
+
+```toml
+[wireguard]
+upstream_interface = "tb25255R64"  # SIT tunnel interface to Route64
+```
+
+### System Requirements
+
+The Debian package automatically configures these, but for manual setup:
+
+```bash
+# Enable IPv6 forwarding
+sysctl -w net.ipv6.conf.all.forwarding=1
+
+# Enable NDP proxy
+sysctl -w net.ipv6.conf.all.proxy_ndp=1
+
+# Make persistent
+cat > /etc/sysctl.d/99-blockhost-broker.conf << EOF
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.all.proxy_ndp = 1
+EOF
+```
+
+### UFW Configuration
+
+If using UFW, allow forwarding between interfaces:
+
+```bash
+ufw allow 51820/udp comment "WireGuard"
+ufw route allow in on wg-broker out on tb25255R64
+ufw route allow in on tb25255R64 out on wg-broker
+```
+
+### Why NDP Proxy Instead of Routing?
+
+Proper tunnel brokers route prefixes to your endpoint. However, some providers (like Route64 with SIT tunnels) expect all addresses within the /64 to be resolved via NDP, as if they were directly on-link. NDP proxy makes allocated addresses appear to be on the upstream interface, allowing the provider to route traffic to them.
+
+For providers that support proper prefix routing (like Hurricane Electric), NDP proxy is not needed - just configure `upstream_interface` to be empty or omit it.
+
+---
+
 ## WireGuard Management
 
 ### Network Architecture
@@ -451,6 +508,8 @@ All allocation changes logged with timestamp, token hash, and action.
 /opt/blockhost-client/venv/               # Virtual environment
 /usr/bin/broker-client                    # Wrapper script
 /etc/blockhost/                           # Config directory
+/etc/blockhost/server.key                 # Persistent ECIES private key
+/etc/blockhost/allocation.json            # Current allocation details
 ```
 
 ### systemd Service
@@ -622,7 +681,15 @@ When enabled, the broker uses blockchain-based verification instead of bearer to
 1. **NFT contract exists** - `getCode(nftContract) != 0x`
 2. **Sender owns contract** - `Ownable(nftContract).owner() == msg.sender`
 3. **Is ERC721** - `supportsInterface(0x80ac58cd) == true`
-4. **No duplicate allocation** - NFT contract not already allocated
+
+### Re-Request Handling
+
+If a request comes from the same NFT contract as an existing allocation:
+- The broker updates the WireGuard public key to the new one
+- The same prefix allocation is returned
+- The old WireGuard peer is removed, new one added
+
+This enables key rotation without losing the allocated prefix.
 
 ### Encryption
 
@@ -651,6 +718,14 @@ poll_interval_ms = 5000
 - **Broker Manager (blockhost-broker-manager)**: Web UI for broker operators, wallet-based auth, lease management
 - **Broker Client (blockhost-broker-client)**: Python script for Proxmox servers, submits requests, configures WireGuard
 
+### Client ECIES Key
+
+The broker-client uses a persistent ECIES key (`/etc/blockhost/server.key`) rather than ephemeral keys:
+- Generated once during first request
+- Used to decrypt broker responses
+- Enables recovery of already-approved requests (e.g., after client restart before processing response)
+- Must be backed up if prefix allocation needs to be recovered
+
 ### Broker Manager Web Interface
 
 The manager provides a web-based dashboard at `https://<broker-ip>:8443`:
@@ -660,11 +735,13 @@ The manager provides a web-based dashboard at `https://<broker-ip>:8443`:
 2. Server generates unique nonce
 3. User signs nonce with MetaMask
 4. Server verifies signature, checks wallet is in authorized list
-5. Session created with 24-hour expiry
+5. Session created with configurable expiry (default: 1 hour, set via `SESSION_LIFETIME_HOURS` env var)
 
 **Features:**
 - View all active leases (prefix, pubkey, NFT contract, timestamp)
 - Release leases (on-chain + WireGuard + database cleanup)
+- Wallet info display (address, balance, network) with low-balance warning
+- ETH top-up via MetaMask integration
 - Self-signed HTTPS certificate
 
 **Configuration:**
