@@ -165,6 +165,16 @@ BROKER_REQUESTS_ABI = [
         "name": "RequestSubmitted",
         "type": "event",
     },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "uint256", "name": "requestId", "type": "uint256"},
+            {"indexed": False, "internalType": "uint8", "name": "status", "type": "uint8"},
+            {"indexed": False, "internalType": "bytes", "name": "encryptedPayload", "type": "bytes"},
+        ],
+        "name": "ResponseSubmitted",
+        "type": "event",
+    },
 ]
 
 # Request status enum (v2 contracts use silent rejections - no REJECTED status)
@@ -209,6 +219,7 @@ class AllocationConfig:
     wg_private_key: str
     wg_public_key: str
     allocated_at: str
+    broker_wallet: str = ""  # Wallet address that submitted the response
 
 
 class ECIESClient:
@@ -402,6 +413,40 @@ class BrokerClient:
             Web3.to_checksum_address(nft_contract)
         ).call()
 
+    def get_response_sender(
+        self, requests_contract: str, request_id: int
+    ) -> Optional[str]:
+        """Get the wallet address that submitted the response for a request.
+
+        Queries the ResponseSubmitted event logs to find the transaction,
+        then extracts the sender (from) address.
+        """
+        contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(requests_contract),
+            abi=BROKER_REQUESTS_ABI,
+        )
+
+        try:
+            # Get ResponseSubmitted events for this request ID
+            # Look back a reasonable number of blocks (e.g., last 10000 blocks)
+            latest_block = self.w3.eth.block_number
+            from_block = max(0, latest_block - 10000)
+
+            logs = contract.events.ResponseSubmitted().get_logs(
+                from_block=from_block,
+                argument_filters={"requestId": request_id},
+            )
+
+            if logs:
+                # Get the transaction that emitted the event
+                tx_hash = logs[0]["transactionHash"]
+                tx = self.w3.eth.get_transaction(tx_hash)
+                return tx["from"]
+        except Exception as e:
+            print(f"Warning: Could not get response sender: {e}", file=sys.stderr)
+
+        return None
+
     def release_allocation(
         self,
         account: LocalAccount,
@@ -562,6 +607,7 @@ def save_allocation_config(config_dir: Path, config: AllocationConfig) -> None:
                 "wg_private_key": config.wg_private_key,
                 "wg_public_key": config.wg_public_key,
                 "allocated_at": config.allocated_at,
+                "broker_wallet": config.broker_wallet,
             },
             indent=2,
         )
@@ -588,6 +634,7 @@ def load_allocation_config(config_dir: Path) -> Optional[AllocationConfig]:
         wg_private_key=data["wg_private_key"],
         wg_public_key=data["wg_public_key"],
         allocated_at=data["allocated_at"],
+        broker_wallet=data.get("broker_wallet", ""),
     )
 
 
@@ -709,10 +756,16 @@ def cmd_request(args: argparse.Namespace) -> int:
                     broker_pubkey=response_data["brokerPubkey"],
                     broker_endpoint=response_data["brokerEndpoint"],
                 )
+                # Get broker wallet from the response transaction
+                recovered_broker_wallet = client.get_response_sender(
+                    broker.requests_contract, existing_request_id
+                ) or ""
                 print(f"Recovered allocation:")
                 print(f"  Prefix: {allocation.prefix}")
                 print(f"  Gateway: {allocation.gateway}")
                 print(f"  Broker endpoint: {allocation.broker_endpoint}")
+                if recovered_broker_wallet:
+                    print(f"  Broker wallet: {recovered_broker_wallet}")
 
                 # Load existing config to get WG keys, or generate new ones
                 existing_config = load_allocation_config(Path(args.config_dir))
@@ -735,6 +788,7 @@ def cmd_request(args: argparse.Namespace) -> int:
                     wg_private_key=wg_private_key,
                     wg_public_key=wg_public_key,
                     allocated_at=datetime.now(timezone.utc).isoformat(),
+                    broker_wallet=recovered_broker_wallet,
                 )
                 save_allocation_config(Path(args.config_dir), config)
 
@@ -797,6 +851,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     # Poll for response
     print("Waiting for broker response...")
     start_time = time.time()
+    broker_wallet = ""
     while True:
         status, response_payload = client.get_request_status(
             broker.requests_contract, request_id
@@ -804,6 +859,10 @@ def cmd_request(args: argparse.Namespace) -> int:
 
         if status == REQUEST_STATUS_APPROVED:
             print("Request approved!")
+            # Get the broker's wallet address from the response transaction
+            broker_wallet = client.get_response_sender(broker.requests_contract, request_id) or ""
+            if broker_wallet:
+                print(f"Broker wallet: {broker_wallet}")
             break
         elif status == REQUEST_STATUS_EXPIRED:
             print("Request expired (silent rejection or timeout)", file=sys.stderr)
@@ -847,6 +906,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         wg_private_key=wg_private_key,
         wg_public_key=wg_public_key,
         allocated_at=datetime.now(timezone.utc).isoformat(),
+        broker_wallet=broker_wallet,
     )
     save_allocation_config(Path(args.config_dir), config)
 
@@ -875,6 +935,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  Prefix: {config.prefix}")
         print(f"  Gateway: {config.gateway}")
         print(f"  Broker: {config.broker_endpoint}")
+        if config.broker_wallet:
+            print(f"  Broker Wallet: {config.broker_wallet}")
         print(f"  NFT Contract: {config.nft_contract}")
         print(f"  Request ID: {config.request_id}")
         print(f"  Allocated: {config.allocated_at}")
