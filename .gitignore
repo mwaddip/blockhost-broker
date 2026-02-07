@@ -51,3 +51,6 @@ build-deb/
 notes.md
 TODO.local.md
 scripts/__pycache__/
+
+# Claude session context (for continuity across compactions)
+SESSION_CONTEXT.md
