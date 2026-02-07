@@ -1,5 +1,17 @@
 # Claude Code Notes - blockhost-broker
 
+## SPECIAL.md (HIGHEST PRIORITY)
+
+**Read and internalize `SPECIAL.md` at the start of every session.** It defines priority weights — where to invest extra scrutiny beyond standard professional practice. All stats at 5 = normal competence. Stats above 5 = extra focus.
+
+This submodule has a single profile — all components share it:
+
+**S7 P8 E8 C4 I7 A6 L7** — Network allocation over encrypted channel.
+
+Extra focus areas: Security (P8 — encrypted channel, trust boundary with external broker), Reliability (E8 — tunnel must survive, reconnect, not lose state), Robustness (S7 — validate everything from the broker, it's external).
+
+See `SPECIAL.md` for full stat definitions and the priority allocation model.
+
 ## Environment Setup
 
 Environment variables should be in `~/projects/sharedenv/blockhost.env` (not committed):
