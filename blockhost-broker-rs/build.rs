@@ -17,16 +17,6 @@ fn main() {
                 .unwrap();
         }
 
-        // BrokerRegistry contract
-        let registry_abi = abi_dir.join("BrokerRegistry.json");
-        if registry_abi.exists() {
-            Abigen::new("BrokerRegistry", registry_abi.to_str().unwrap())
-                .unwrap()
-                .generate()
-                .unwrap()
-                .write_to_file("src/eth/broker_registry.rs")
-                .unwrap();
-        }
     }
 
     println!("cargo:rerun-if-changed=contracts/abi/");

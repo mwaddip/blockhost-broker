@@ -23,9 +23,12 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import secrets
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,7 +41,6 @@ try:
     from eth_account.signers.local import LocalAccount
     from eth_keys import keys
     from web3 import Web3
-    from web3.exceptions import ContractLogicError
     import urllib.request
 except ImportError as e:
     print(f"Missing dependency: {e}", file=sys.stderr)
@@ -51,20 +53,53 @@ DEFAULT_CONFIG_DIR = Path("/etc/blockhost")
 DEFAULT_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com"
 DEFAULT_CHAIN_ID = 11155111
 DEFAULT_POLL_INTERVAL = 5  # seconds
+MIN_POLL_INTERVAL = 2  # minimum seconds between RPC polls
 DEFAULT_TIMEOUT = 300  # 5 minutes
+GAS_BUFFER = 50000  # extra gas added to estimates
+TX_RECEIPT_TIMEOUT = 120  # seconds to wait for transaction receipt
+EVENT_BLOCK_LOOKBACK = 10000  # blocks to search back for events
 
 # Remote configuration URL - contains the current BrokerRegistry contract address
 # This allows updating the registry address without releasing a new client version
 REGISTRY_CONFIG_URL = "https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json"
 
 
+WG_INTERFACE_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,15}$")
+
+
+def validate_wg_interface(name: str) -> str:
+    """Validate WireGuard interface name."""
+    if not WG_INTERFACE_PATTERN.match(name):
+        raise ValueError(
+            f"Invalid WireGuard interface name: {name!r} "
+            "(must be 1-15 alphanumeric/dash/underscore characters)"
+        )
+    return name
+
+
+def validate_hex_pubkey(hex_str: str, label: str = "public key") -> bytes:
+    """Validate a hex-encoded public key and return bytes."""
+    try:
+        key_bytes = bytes.fromhex(hex_str)
+    except ValueError:
+        raise ValueError(f"Invalid hex encoding for {label}: {hex_str[:20]}...")
+    if len(key_bytes) < 32:
+        raise ValueError(f"{label} too short ({len(key_bytes)} bytes, expected >= 32)")
+    return key_bytes
+
+
 def fetch_registry_address() -> Optional[str]:
     """Fetch the current BrokerRegistry contract address from remote config."""
     try:
         with urllib.request.urlopen(REGISTRY_CONFIG_URL, timeout=10) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            return data.get("registry_contract")
-    except Exception as e:
+            raw = response.read(4096)  # Limit read size
+            data = json.loads(raw.decode('utf-8'))
+            addr = data.get("registry_contract")
+            if addr and isinstance(addr, str) and len(addr) == 42 and addr.startswith("0x"):
+                return addr
+            print("Warning: Invalid registry address format in remote config", file=sys.stderr)
+            return None
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError) as e:
         print(f"Warning: Could not fetch registry address: {e}", file=sys.stderr)
         return None
 
@@ -182,6 +217,12 @@ REQUEST_STATUS_PENDING = 0
 REQUEST_STATUS_APPROVED = 1
 REQUEST_STATUS_EXPIRED = 3
 
+REQUEST_STATUS_NAMES = {
+    REQUEST_STATUS_PENDING: "Pending",
+    REQUEST_STATUS_APPROVED: "Approved",
+    REQUEST_STATUS_EXPIRED: "Expired",
+}
+
 
 @dataclass
 class BrokerInfo:
@@ -194,6 +235,33 @@ class BrokerInfo:
     region: str
     capacity: int
     current_load: int
+
+
+def _validate_allocation_response(data: dict) -> "AllocationResponse":
+    """Validate and construct an AllocationResponse from decrypted broker data."""
+    required_fields = ["prefix", "gateway", "brokerPubkey", "brokerEndpoint"]
+    for field in required_fields:
+        if field not in data or not isinstance(data[field], str) or not data[field]:
+            raise ValueError(f"Missing or invalid field in broker response: {field}")
+
+    # Validate prefix is a valid IPv6 CIDR
+    try:
+        ipaddress.IPv6Network(data["prefix"], strict=False)
+    except (ValueError, ipaddress.AddressValueError) as e:
+        raise ValueError(f"Invalid IPv6 prefix in broker response: {e}")
+
+    # Validate gateway is a valid IPv6 address
+    try:
+        ipaddress.IPv6Address(data["gateway"])
+    except (ValueError, ipaddress.AddressValueError) as e:
+        raise ValueError(f"Invalid gateway address in broker response: {e}")
+
+    return AllocationResponse(
+        prefix=data["prefix"],
+        gateway=data["gateway"],
+        broker_pubkey=data["brokerPubkey"],
+        broker_endpoint=data["brokerEndpoint"],
+    )
 
 
 @dataclass
@@ -361,7 +429,7 @@ class BrokerClient:
             {
                 "from": account.address,
                 "nonce": self.w3.eth.get_transaction_count(account.address),
-                "gas": gas_estimate + 50000,  # Add buffer
+                "gas": gas_estimate + GAS_BUFFER,
                 "maxFeePerGas": self.w3.eth.gas_price * 2,
                 "maxPriorityFeePerGas": self.w3.eth.gas_price,
                 "chainId": self.chain_id,
@@ -370,7 +438,7 @@ class BrokerClient:
 
         signed = account.sign_transaction(tx)
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=TX_RECEIPT_TIMEOUT)
 
         if receipt["status"] != 1:
             raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
@@ -428,9 +496,8 @@ class BrokerClient:
 
         try:
             # Get ResponseSubmitted events for this request ID
-            # Look back a reasonable number of blocks (e.g., last 10000 blocks)
             latest_block = self.w3.eth.block_number
-            from_block = max(0, latest_block - 10000)
+            from_block = max(0, latest_block - EVENT_BLOCK_LOOKBACK)
 
             logs = contract.events.ResponseSubmitted().get_logs(
                 from_block=from_block,
@@ -470,7 +537,7 @@ class BrokerClient:
             {
                 "from": account.address,
                 "nonce": self.w3.eth.get_transaction_count(account.address),
-                "gas": gas_estimate + 50000,
+                "gas": gas_estimate + GAS_BUFFER,
                 "maxFeePerGas": self.w3.eth.gas_price * 2,
                 "maxPriorityFeePerGas": self.w3.eth.gas_price,
                 "chainId": self.chain_id,
@@ -479,7 +546,7 @@ class BrokerClient:
 
         signed = account.sign_transaction(tx)
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=TX_RECEIPT_TIMEOUT)
 
         if receipt["status"] != 1:
             raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
@@ -520,10 +587,17 @@ def configure_wireguard(
     broker_endpoint: str,
 ) -> None:
     """Configure WireGuard interface for broker tunnel."""
-    # Write private key to temp file
+    validate_wg_interface(interface)
+
+    # Write private key to temp file (secure creation to avoid TOCTOU race)
+    fd = os.open(
+        f"/tmp/wg-{interface}-private.key",
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        0o600,
+    )
     key_file = Path(f"/tmp/wg-{interface}-private.key")
-    key_file.write_text(private_key)
-    key_file.chmod(0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(private_key)
 
     try:
         # Create interface if not exists
@@ -712,7 +786,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             id=0,
             operator="",
             requests_contract=args.requests_contract,
-            encryption_pubkey=bytes.fromhex(args.broker_pubkey),
+            encryption_pubkey=validate_hex_pubkey(args.broker_pubkey, "broker ECIES public key"),
             region="",
             capacity=0,
             current_load=0,
@@ -750,12 +824,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             # Decrypt the existing response using server.key
             try:
                 response_data = ecies_client.decrypt_json(response_payload)
-                allocation = AllocationResponse(
-                    prefix=response_data["prefix"],
-                    gateway=response_data["gateway"],
-                    broker_pubkey=response_data["brokerPubkey"],
-                    broker_endpoint=response_data["brokerEndpoint"],
-                )
+                allocation = _validate_allocation_response(response_data)
                 # Get broker wallet from the response transaction
                 recovered_broker_wallet = client.get_response_sender(
                     broker.requests_contract, existing_request_id
@@ -848,7 +917,8 @@ def cmd_request(args: argparse.Namespace) -> int:
     else:
         request_id = existing_request_id
 
-    # Poll for response
+    # Poll for response (enforce minimum interval to avoid RPC spam)
+    poll_interval = max(args.poll_interval, MIN_POLL_INTERVAL)
     print("Waiting for broker response...")
     start_time = time.time()
     broker_wallet = ""
@@ -874,7 +944,7 @@ def cmd_request(args: argparse.Namespace) -> int:
             return 1
 
         print(f"  Pending... ({int(elapsed)}s)")
-        time.sleep(args.poll_interval)
+        time.sleep(poll_interval)
 
     # Decrypt response
     print("Decrypting response...")
@@ -884,12 +954,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         print(f"Failed to decrypt response: {e}", file=sys.stderr)
         return 1
 
-    allocation = AllocationResponse(
-        prefix=response_data["prefix"],
-        gateway=response_data["gateway"],
-        broker_pubkey=response_data["brokerPubkey"],
-        broker_endpoint=response_data["brokerEndpoint"],
-    )
+    allocation = _validate_allocation_response(response_data)
 
     print(f"Allocated prefix: {allocation.prefix}")
     print(f"Gateway: {allocation.gateway}")
@@ -960,12 +1025,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             status, _ = client.get_request_status(
                 args.requests_contract, request_id
             )
-            status_names = {
-                REQUEST_STATUS_PENDING: "Pending",
-                REQUEST_STATUS_APPROVED: "Approved",
-                REQUEST_STATUS_EXPIRED: "Expired",
-            }
-            print(f"\nOn-chain request #{request_id}: {status_names.get(status, 'Unknown')}")
+            print(f"\nOn-chain request #{request_id}: {REQUEST_STATUS_NAMES.get(status, 'Unknown')}")
 
     return 0
 
@@ -1197,12 +1257,7 @@ def cmd_release(args: argparse.Namespace) -> int:
         print("No on-chain allocation found for this NFT contract")
     else:
         status, _ = client.get_request_status(requests_contract, request_id)
-        status_names = {
-            REQUEST_STATUS_PENDING: "Pending",
-            REQUEST_STATUS_APPROVED: "Approved",
-            REQUEST_STATUS_EXPIRED: "Expired",
-        }
-        print(f"Found request #{request_id} (status: {status_names.get(status, 'Unknown')})")
+        print(f"Found request #{request_id} (status: {REQUEST_STATUS_NAMES.get(status, 'Unknown')})")
 
         # Release on-chain
         print("Releasing allocation on-chain...")

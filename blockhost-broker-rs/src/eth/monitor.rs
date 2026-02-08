@@ -90,7 +90,12 @@ impl OnchainMonitor {
         let provider = Provider::<Http>::try_from(&onchain_config.rpc_url)
             .map_err(|e| MonitorError::Config(format!("Invalid RPC URL: {}", e)))?;
 
-        // Load operator wallet
+        // Load operator wallet (with size limit to catch misconfigured paths)
+        let key_metadata = std::fs::metadata(&onchain_config.private_key_file)
+            .map_err(|e| MonitorError::Config(format!("Failed to read private key: {}", e)))?;
+        if key_metadata.len() > 1024 {
+            return Err(MonitorError::Config("Private key file too large (>1KB)".to_string()));
+        }
         let private_key = std::fs::read_to_string(&onchain_config.private_key_file)
             .map_err(|e| MonitorError::Config(format!("Failed to read private key: {}", e)))?;
         let wallet: LocalWallet = private_key
@@ -257,7 +262,7 @@ impl OnchainMonitor {
             .encryption
             .decrypt_request_payload(&request.encrypted_payload)?;
 
-        let nft_contract_str = format!("{:?}", request.nft_contract);
+        let nft_contract_str = format!("{:?}", request.nft_contract).to_lowercase();
 
         // Check if this NFT contract already has an allocation
         let ipam = self.ipam.lock().await;
@@ -327,10 +332,7 @@ impl OnchainMonitor {
                     "Failed to add WireGuard peer"
                 );
                 // Rollback allocation
-                let ipam = self.ipam.lock().await;
-                let _ = ipam
-                    .release(&allocation.prefix.to_string(), &nft_contract_str)
-                    .await;
+                self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
                 return Err(e.into());
             }
 
@@ -342,12 +344,7 @@ impl OnchainMonitor {
             Some(key) => key,
             None => {
                 error!(request_id = request.id, "Could not get broker WireGuard public key");
-                // Rollback
-                let _ = self.wg.remove_peer(&payload.wg_pubkey);
-                let ipam = self.ipam.lock().await;
-                let _ = ipam
-                    .release(&allocation.prefix.to_string(), &nft_contract_str)
-                    .await;
+                self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
                 return Ok(()); // Silent rejection
             }
         };
@@ -372,12 +369,7 @@ impl OnchainMonitor {
                     error = %e,
                     "Failed to encrypt response"
                 );
-                // Rollback
-                let _ = self.wg.remove_peer(&payload.wg_pubkey);
-                let ipam = self.ipam.lock().await;
-                let _ = ipam
-                    .release(&allocation.prefix.to_string(), &nft_contract_str)
-                    .await;
+                self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
                 return Err(e.into());
             }
         };
@@ -392,6 +384,13 @@ impl OnchainMonitor {
         );
 
         Ok(())
+    }
+
+    /// Rollback a failed allocation: remove WireGuard peer and release IPAM prefix.
+    async fn rollback_allocation(&self, pubkey: &str, prefix: &str, nft_contract: &str) {
+        let _ = self.wg.remove_peer(pubkey);
+        let ipam = self.ipam.lock().await;
+        let _ = ipam.release(prefix, nft_contract).await;
     }
 
     /// Submit an approval response on-chain.
@@ -450,7 +449,7 @@ impl OnchainMonitor {
 
         // Release from IPAM
         let ipam = self.ipam.lock().await;
-        let _ = ipam.release(prefix, &format!("{:?}", nft_contract)).await;
+        let _ = ipam.release(prefix, &format!("{:?}", nft_contract).to_lowercase()).await;
         drop(ipam);
 
         // Release on-chain

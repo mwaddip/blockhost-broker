@@ -44,6 +44,14 @@ contract BrokerRegistry is Ownable {
     constructor() Ownable(msg.sender) {}
 
     /**
+     * @dev Get caller's broker ID; reverts if not a registered operator.
+     */
+    function _requireOperator() internal view returns (uint256 brokerId) {
+        brokerId = operatorToBrokerId[msg.sender];
+        require(brokerId != 0, "Not a registered operator");
+    }
+
+    /**
      * @notice Register a new broker (owner only)
      * @param operator Address of the broker operator wallet
      * @param requestsContract Address of the broker's BrokerRequests contract
@@ -88,8 +96,7 @@ contract BrokerRegistry is Ownable {
      * @param encryptionPubkey New secp256k1 public key (65 bytes)
      */
     function updateEncryptionPubkey(bytes calldata encryptionPubkey) external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
         require(encryptionPubkey.length == 65, "Pubkey must be 65 bytes");
 
         brokers[brokerId - 1].encryptionPubkey = encryptionPubkey;
@@ -101,8 +108,8 @@ contract BrokerRegistry is Ownable {
      * @param region New region string
      */
     function updateRegion(string calldata region) external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
+        require(bytes(region).length > 0, "Region cannot be empty");
 
         brokers[brokerId - 1].region = region;
         emit BrokerUpdated(brokerId, msg.sender);
@@ -113,8 +120,7 @@ contract BrokerRegistry is Ownable {
      * @param capacity New capacity (0 = unlimited)
      */
     function updateCapacity(uint256 capacity) external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
 
         brokers[brokerId - 1].capacity = capacity;
         emit BrokerUpdated(brokerId, msg.sender);
@@ -125,8 +131,9 @@ contract BrokerRegistry is Ownable {
      * @param currentLoad New current load value
      */
     function updateLoad(uint256 currentLoad) external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
+        uint256 cap = brokers[brokerId - 1].capacity;
+        require(cap == 0 || currentLoad <= cap, "Load exceeds capacity");
 
         brokers[brokerId - 1].currentLoad = currentLoad;
         emit BrokerLoadUpdated(brokerId, currentLoad);
@@ -136,8 +143,7 @@ contract BrokerRegistry is Ownable {
      * @notice Deactivate broker (stop accepting new requests)
      */
     function deactivate() external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
 
         brokers[brokerId - 1].active = false;
         emit BrokerDeactivated(brokerId, msg.sender);
@@ -147,8 +153,7 @@ contract BrokerRegistry is Ownable {
      * @notice Activate broker (start accepting new requests)
      */
     function activate() external {
-        uint256 brokerId = operatorToBrokerId[msg.sender];
-        require(brokerId != 0, "Not a registered operator");
+        uint256 brokerId = _requireOperator();
 
         brokers[brokerId - 1].active = true;
         emit BrokerActivated(brokerId, msg.sender);

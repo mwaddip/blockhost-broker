@@ -58,7 +58,11 @@ impl Ipam {
     pub async fn new(db_path: &Path, config: BrokerConfig) -> Result<Self, IpamError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent).map_err(|e| {
+                IpamError::Database(sqlx::Error::Configuration(
+                    format!("Failed to create database directory {}: {}", parent.display(), e).into(),
+                ))
+            })?;
         }
 
         let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
@@ -233,7 +237,7 @@ impl Ipam {
         .last_insert_rowid();
 
         self.audit("allocate", Some(&nft_contract_lower), Some(&prefix.to_string()),
-                   &format!(r#"{{"pubkey":"{}"}}"#, pubkey)).await?;
+                   &serde_json::json!({"pubkey": pubkey}).to_string()).await?;
 
         info!(prefix = %prefix, pubkey = %pubkey, "Allocated prefix");
 
@@ -375,7 +379,7 @@ impl Ipam {
             "update_pubkey",
             Some(&nft_contract_lower),
             Some(&allocation.prefix.to_string()),
-            &format!(r#"{{"old_pubkey":"{}","new_pubkey":"{}"}}"#, allocation.pubkey, new_pubkey),
+            &serde_json::json!({"old_pubkey": allocation.pubkey, "new_pubkey": new_pubkey}).to_string(),
         )
         .await?;
 
@@ -494,6 +498,17 @@ impl Ipam {
         .await?;
 
         row.map(|r| self.row_to_token(&r)).transpose()
+    }
+
+    /// List all tokens.
+    pub async fn list_tokens(&self) -> Result<Vec<Token>, IpamError> {
+        let rows = sqlx::query(
+            "SELECT id, token_hash, name, max_allocations, is_admin, created_at, expires_at, revoked FROM tokens ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(|r| self.row_to_token(r)).collect()
     }
 
     /// Validate a plaintext token and return Token if valid.

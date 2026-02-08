@@ -14,6 +14,8 @@ contract BrokerRequests is Ownable {
     bytes4 private constant ERC721_INTERFACE_ID = 0x80ac58cd;
 
     /// @notice Request status enum
+    /// @dev Rejected is unused — rejections are silent (broker doesn't respond, request expires).
+    ///      Kept for ABI stability and potential future use.
     enum RequestStatus {
         Pending,
         Approved,

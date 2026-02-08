@@ -275,8 +275,23 @@ async fn cmd_token(config: &Config, action: TokenAction) -> Result<()> {
             println!("Save this token securely - it cannot be retrieved later!");
         }
         TokenAction::List => {
-            // Token listing would require additional method in IPAM
-            println!("Token listing not yet implemented in Rust version");
+            let tokens = ipam.list_tokens().await.context("Failed to list tokens")?;
+            if tokens.is_empty() {
+                println!("No tokens found");
+            } else {
+                println!("{:<5} {:<20} {:<12} {:<6} {:<8}", "ID", "Name", "Max Allocs", "Admin", "Revoked");
+                println!("{}", "-".repeat(55));
+                for t in &tokens {
+                    println!(
+                        "{:<5} {:<20} {:<12} {:<6} {:<8}",
+                        t.id,
+                        t.name.as_deref().unwrap_or("(none)"),
+                        t.max_allocations,
+                        t.is_admin,
+                        t.revoked,
+                    );
+                }
+            }
         }
     }
 

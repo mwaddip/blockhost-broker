@@ -59,7 +59,7 @@ ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
 registry_contract = "0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf"
 
 # BrokerRequests contract address (required for on-chain mode)
-requests_contract = "0xb7C329cFD95ADC4eE3413918864d4506540f7341"
+requests_contract = "0xCD75c00dBB3F05cF27f16699591f4256a798e694"
 
 # Poll interval for new requests (milliseconds)
 poll_interval_ms = 5000

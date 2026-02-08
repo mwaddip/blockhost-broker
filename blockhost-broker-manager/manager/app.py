@@ -1,7 +1,9 @@
 """Main Flask application for Blockhost Broker Manager."""
 
+import logging
 import os
 import secrets
+import time
 from functools import wraps
 from pathlib import Path
 
@@ -20,10 +22,16 @@ from flask import (
 from .auth import AuthManager
 from .broker import BrokerManager
 
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__, template_folder="templates", static_folder="../static")
 
 # Configuration - loaded from environment or config file
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+_secret_key = os.environ.get("SECRET_KEY")
+if not _secret_key:
+    logger.warning("SECRET_KEY not set — generating ephemeral key (sessions will not survive restarts)")
+    _secret_key = secrets.token_hex(32)
+app.secret_key = _secret_key
 
 # Session configuration - match AuthManager.SESSION_EXPIRY
 SESSION_LIFETIME_HOURS = int(os.environ.get("SESSION_LIFETIME_HOURS", "24"))
@@ -31,6 +39,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=SESSION_LIFETIME_HOUR
 app.config["SESSION_COOKIE_SECURE"] = True  # HTTPS only
 app.config["SESSION_COOKIE_HTTPONLY"] = True  # No JS access
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # CSRF protection
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024  # 64KB max request size
 
 # Paths
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/etc/blockhost-broker-manager"))
@@ -93,6 +102,7 @@ def login_required(f):
             return redirect(url_for("login"))
 
         auth = get_auth_manager()
+        auth.cleanup_expired()
         address = auth.validate_session(token)
         if not address:
             session.pop("auth_token", None)
@@ -149,12 +159,34 @@ def dashboard():
     )
 
 
+# Simple rate limiting for auth endpoints (per-IP, in-memory)
+_auth_rate_limit: dict[str, list[float]] = {}
+AUTH_RATE_LIMIT_MAX = 10  # max attempts per window
+AUTH_RATE_LIMIT_WINDOW = 60  # seconds
+
+
+def _check_auth_rate_limit() -> bool:
+    """Return True if request is within rate limit, False if exceeded."""
+    ip = request.remote_addr or "unknown"
+    now = time.time()
+    timestamps = _auth_rate_limit.get(ip, [])
+    # Prune old entries
+    timestamps = [t for t in timestamps if now - t < AUTH_RATE_LIMIT_WINDOW]
+    if len(timestamps) >= AUTH_RATE_LIMIT_MAX:
+        return False
+    timestamps.append(now)
+    _auth_rate_limit[ip] = timestamps
+    return True
+
+
 # ============ API Routes ============
 
 
 @app.route("/api/auth/nonce", methods=["POST"])
 def api_get_nonce():
     """Get a nonce for wallet signing."""
+    if not _check_auth_rate_limit():
+        return jsonify({"error": "Too many requests"}), 429
     auth = get_auth_manager()
     nonce = auth.generate_nonce()
     message = f"Sign this message to authenticate with Blockhost Broker Manager.\n\nNonce: {nonce}"
@@ -164,6 +196,8 @@ def api_get_nonce():
 @app.route("/api/auth/verify", methods=["POST"])
 def api_verify_signature():
     """Verify a signed nonce and create session."""
+    if not _check_auth_rate_limit():
+        return jsonify({"error": "Too many requests"}), 429
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
@@ -173,6 +207,12 @@ def api_verify_signature():
 
     if not nonce or not signature:
         return jsonify({"error": "Missing nonce or signature"}), 400
+
+    # Validate input types and lengths
+    if not isinstance(nonce, str) or len(nonce) > 256:
+        return jsonify({"error": "Invalid nonce"}), 400
+    if not isinstance(signature, str) or len(signature) > 512:
+        return jsonify({"error": "Invalid signature"}), 400
 
     auth = get_auth_manager()
 

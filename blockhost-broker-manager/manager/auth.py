@@ -1,8 +1,7 @@
 """Wallet-based authentication with replay protection."""
 
-import hashlib
-import hmac
 import json
+import logging
 import secrets
 import time
 from pathlib import Path
@@ -10,6 +9,8 @@ from typing import Optional
 
 from eth_account.messages import encode_defunct
 from web3 import Web3
+
+logger = logging.getLogger(__name__)
 
 
 class AuthManager:
@@ -56,7 +57,7 @@ class AuthManager:
         """Check if wallet is authorized."""
         try:
             return Web3.to_checksum_address(address) in self.authorized_wallets
-        except Exception:
+        except (ValueError, TypeError):
             return False
 
     def generate_nonce(self) -> str:
@@ -91,7 +92,11 @@ class AuthManager:
             w3 = Web3()
             recovered = w3.eth.account.recover_message(message_hash, signature=signature)
             return Web3.to_checksum_address(recovered)
-        except Exception:
+        except (ValueError, TypeError) as e:
+            logger.debug("Signature verification failed: %s", e)
+            return None
+        except Exception as e:
+            logger.warning("Unexpected error during signature verification: %s", e)
             return None
 
     def create_session(self, address: str) -> str:

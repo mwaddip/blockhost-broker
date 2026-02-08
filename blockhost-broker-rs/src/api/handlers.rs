@@ -142,11 +142,25 @@ async fn list_allocations(
     Ok(Json(infos))
 }
 
+/// Validate that a string is a valid IPv6 CIDR prefix.
+fn validate_prefix(prefix: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    prefix.parse::<ipnet::Ipv6Net>().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid IPv6 prefix format".to_string(),
+            }),
+        )
+    })?;
+    Ok(())
+}
+
 /// Get a specific allocation.
 async fn get_allocation(
     State(state): State<Arc<AppState>>,
     Path(prefix): Path<String>,
 ) -> Result<Json<AllocationInfo>, (StatusCode, Json<ErrorResponse>)> {
+    validate_prefix(&prefix)?;
     let ipam = state.ipam.lock().await;
     let allocation = ipam.get_allocation_by_prefix(&prefix).await.map_err(|e| {
         (
@@ -190,6 +204,7 @@ async fn delete_allocation(
     State(state): State<Arc<AppState>>,
     Path(prefix): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    validate_prefix(&prefix)?;
     let ipam = state.ipam.lock().await;
 
     // Get allocation first to get pubkey for WireGuard cleanup

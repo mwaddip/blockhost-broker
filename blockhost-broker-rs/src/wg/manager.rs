@@ -69,9 +69,15 @@ impl WireGuardManager {
         }
     }
 
-    /// Run a command that may fail (best effort).
+    /// Run a command that may fail (best effort, logs failures).
     fn run_command_best_effort(&self, args: &[&str]) -> Option<String> {
-        self.run_command(args).ok()
+        match self.run_command(args) {
+            Ok(output) => Some(output),
+            Err(e) => {
+                warn!(command = ?args, error = %e, "Best-effort command failed");
+                None
+            }
+        }
     }
 
     /// Add a WireGuard peer.

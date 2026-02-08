@@ -1,5 +1,6 @@
 """Broker interaction - read leases and release allocations."""
 
+import logging
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import Optional
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from web3 import Web3
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -175,14 +178,14 @@ class BrokerManager:
             try:
                 tx_hash = self._release_onchain(nft_contract)
             except Exception as e:
-                return {"success": False, "message": f"On-chain release failed: {e}"}
+                logger.error("On-chain release failed for lease %d: %s", lease_id, e)
+                return {"success": False, "message": "On-chain release failed"}
 
             # 2. Remove WireGuard peer
             try:
                 self._remove_wg_peer(pubkey)
             except Exception as e:
-                # Log but continue - on-chain release succeeded
-                pass
+                logger.warning("Failed to remove WireGuard peer %s: %s", pubkey[:20], e)
 
             # 3. Delete from database
             cursor.execute("DELETE FROM allocations WHERE id = ?", (lease_id,))
