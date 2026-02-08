@@ -83,6 +83,52 @@
             {% endif %}
         </div>
     </section>
+
+    <section class="section section-test">
+        <div class="section-header">
+            <h2>Test Leases <span class="badge badge-test">{{ test_leases|length }}</span></h2>
+            <button class="btn btn-secondary btn-small" id="toggle-test-btn">{% if test_leases %}Hide{% else %}Show{% endif %}</button>
+        </div>
+
+        <div id="test-leases-container" {% if not test_leases %}class="hidden"{% endif %}>
+            {% if test_leases %}
+            <table class="leases-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Prefix</th>
+                        <th>WireGuard Pubkey</th>
+                        <th>NFT Contract</th>
+                        <th>Allocated</th>
+                        <th>Expires</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lease in test_leases %}
+                    <tr data-lease-id="{{ lease.id }}">
+                        <td>{{ lease.id }}</td>
+                        <td><code>{{ lease.prefix }}</code></td>
+                        <td><code class="truncate" title="{{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
+                        <td><code class="truncate" title="{{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td>{{ lease.allocated_at[:19] }}</td>
+                        <td>{% if lease.expires_at %}{{ lease.expires_at[:19] }}{% else %}&mdash;{% endif %}</td>
+                        <td>
+                            <button class="btn btn-danger btn-small release-btn" data-lease-id="{{ lease.id }}">
+                                Release
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No test leases</p>
+            </div>
+            {% endif %}
+        </div>
+    </section>
 </main>
 
 <div id="modal" class="modal hidden">
@@ -208,6 +254,14 @@ document.addEventListener('DOMContentLoaded', function() {
         location.reload();
     });
 
+    // Toggle test leases section
+    const toggleTestBtn = document.getElementById('toggle-test-btn');
+    const testContainer = document.getElementById('test-leases-container');
+    toggleTestBtn.addEventListener('click', function() {
+        const hidden = testContainer.classList.toggle('hidden');
+        toggleTestBtn.textContent = hidden ? 'Show' : 'Hide';
+    });
+
     // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') hideModal();
@@ -238,13 +292,20 @@ document.addEventListener('DOMContentLoaded', function() {
             // Request account access
             const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
 
-            // Check network
+            // Ensure correct chain
             const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
             const currentChainId = parseInt(chainIdHex, 16);
 
             if (currentChainId !== brokerChainId) {
-                showToast(`Please switch to the correct network (Chain ID: ${brokerChainId})`, 'error');
-                return;
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x' + brokerChainId.toString(16) }],
+                    });
+                } catch (switchErr) {
+                    showToast(`Could not switch to chain ${brokerChainId}: ${switchErr.message || switchErr}`, 'error');
+                    return;
+                }
             }
 
             // Convert ETH to wei (hex)

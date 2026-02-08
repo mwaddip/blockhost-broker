@@ -15,6 +15,8 @@ pub struct Allocation {
     pub nft_contract: String,
     pub allocated_at: DateTime<Utc>,
     pub last_seen_at: Option<DateTime<Utc>>,
+    pub is_test: bool,
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// An API token (for REST API authentication).

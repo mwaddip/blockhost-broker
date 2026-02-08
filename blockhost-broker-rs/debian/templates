@@ -1,71 +1,12 @@
-Template: blockhost-broker/private-key-action
-Type: select
-Choices: generate, provide, skip
-Default: generate
-Description: Ethereum private key setup
- The broker needs an Ethereum private key to deploy contracts and sign transactions.
- .
- Choose how to set up your private key:
-  - generate: Create a new random key
-  - provide: Enter an existing key
-  - skip: Configure manually later
-
-Template: blockhost-broker/private-key
-Type: password
-Description: Ethereum private key
- Enter your Ethereum private key (hex format, with or without 0x prefix).
- .
- This key will be stored securely with restricted permissions.
-
-Template: blockhost-broker/wallet-address
-Type: note
-Description: Wallet address created
- Your wallet address is: ${ADDRESS}
- .
- This address will be used for contract deployment and operations.
-
-Template: blockhost-broker/fund-wallet
-Type: boolean
-Default: false
-Description: Wallet needs funding
- Your wallet has insufficient funds for contract deployment.
- .
- Current balance: ${BALANCE}
- Required minimum: 0.01 ETH (Sepolia testnet)
- .
- Please send Sepolia ETH to: ${ADDRESS}
- .
- You can get free Sepolia ETH from:
-  - https://sepoliafaucet.com
-  - https://www.alchemy.com/faucets/ethereum-sepolia
- .
- Have you sent funds to the wallet?
-
-Template: blockhost-broker/deploy-contract
-Type: boolean
-Default: true
-Description: Deploy BrokerRequests contract?
- Would you like to deploy a new BrokerRequests contract?
- .
- This contract handles allocation requests from clients.
- You need one deployed contract per broker instance.
- .
- If you already have a contract deployed, choose No and provide the address.
-
 Template: blockhost-broker/existing-contract
 Type: string
-Description: Existing BrokerRequests contract address
- Enter the address of your existing BrokerRequests contract.
+Description: BrokerRequests contract address
+ Enter the address of your BrokerRequests contract (if you have one).
+ .
+ Leave blank to configure later. You can deploy contracts separately
+ using: blockhost-broker deploy-contracts
  .
  Format: 0x followed by 40 hexadecimal characters
- Example: 0x43880eA324BF7842A72a9ed0680B3dd1cD6CD7C8
-
-Template: blockhost-broker/contract-deployed
-Type: note
-Description: Contract deployed successfully
- BrokerRequests contract deployed at: ${CONTRACT_ADDRESS}
- .
- This has been saved to your configuration.
 
 Template: blockhost-broker/ipv6-interface
 Type: select
@@ -140,15 +81,3 @@ Description: Upstream network interface for NDP proxy
  can route traffic to allocated client addresses.
  .
  Leave blank to skip NDP proxy configuration.
-
-Template: blockhost-broker/setup-complete
-Type: note
-Description: Setup complete
- Blockhost Broker has been configured.
- .
- Configuration file: /etc/blockhost-broker/config.toml
- .
- Next steps:
-  1. Register your broker in BrokerRegistry smart contract
-  2. Start the service: systemctl enable --now blockhost-broker
-  3. Monitor logs: journalctl -u blockhost-broker -f

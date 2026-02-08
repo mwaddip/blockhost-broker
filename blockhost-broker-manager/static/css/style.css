@@ -294,6 +294,17 @@ body {
     overflow: hidden;
 }
 
+.section-test {
+    margin-top: 1.5rem;
+    opacity: 0.85;
+}
+
+.section-test .section-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .section-header {
     display: flex;
     align-items: center;
@@ -366,6 +377,22 @@ body {
     padding: 3rem;
     text-align: center;
     color: var(--color-text-secondary);
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.badge-test {
+    background-color: rgba(255, 173, 31, 0.15);
+    color: var(--color-warning);
 }
 
 /* Modal */

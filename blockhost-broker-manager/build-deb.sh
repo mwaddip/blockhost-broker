@@ -3,7 +3,7 @@
 
 set -e
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 PKG_NAME="blockhost-broker-manager_${VERSION}_all"
 
 echo "Building blockhost-broker-manager v${VERSION}..."

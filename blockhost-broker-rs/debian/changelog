@@ -1,3 +1,17 @@
+blockhost-broker (0.2.0-1) unstable; urgency=medium
+
+  * V2 contracts: overwrite-on-duplicate, capacity tracking, re-registration
+  * Legacy contract monitoring during migration
+  * Test contract support with auto-expiring 24h allocations
+  * Post-approval tunnel verification (release on no WG handshake)
+  * NDP proxy management for allocated prefixes
+  * Re-request support (update pubkey for existing allocation)
+  * Request ID prefix on encrypted responses for stale detection
+  * ECIES V1 fallback decryption
+  * Debian packaging with debconf setup wizard
+
+ -- Blockhost <contact@blockhost.io>  Sun, 08 Feb 2026 00:00:00 +0000
+
 blockhost-broker (0.1.0-1) unstable; urgency=medium
 
   * Initial Rust implementation

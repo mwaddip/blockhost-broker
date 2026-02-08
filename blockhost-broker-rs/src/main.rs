@@ -27,8 +27,8 @@ use db::Ipam;
 use eth::OnchainMonitor;
 use setup::{
     detect_ipv6_interfaces, format_eth, generate_private_key, get_wallet_address,
-    get_wallet_balance, read_private_key, suggest_allocation_sizes, write_private_key,
-    deploy_broker_requests, MIN_DEPLOYMENT_BALANCE,
+    get_wallet_balance, read_ecies_pubkey, read_private_key, suggest_allocation_sizes,
+    write_private_key, deploy_broker_requests, MIN_DEPLOYMENT_BALANCE,
 };
 use wg::WireGuardManager;
 
@@ -96,19 +96,31 @@ enum Commands {
         action: WalletAction,
     },
 
-    /// Deploy BrokerRequests contract
-    DeployRequests {
-        /// RPC URL
+    /// Deploy BrokerRequests contract and show registration info
+    DeployContracts {
+        /// Ethereum RPC URL
         #[arg(long)]
         rpc_url: String,
 
-        /// Chain ID
+        /// Chain ID (e.g. 11155111 for Sepolia)
         #[arg(long)]
         chain_id: u64,
 
-        /// Path to private key file
+        /// Path to operator private key file
         #[arg(long)]
-        private_key: PathBuf,
+        operator_key: PathBuf,
+
+        /// Path to ECIES private key file (for public key derivation)
+        #[arg(long)]
+        ecies_key: PathBuf,
+
+        /// Broker region identifier (e.g. "eu-west")
+        #[arg(long, default_value = "")]
+        region: String,
+
+        /// Total capacity (max concurrent leases, 0 = unlimited)
+        #[arg(long, default_value = "0")]
+        capacity: u64,
     },
 }
 
@@ -195,8 +207,8 @@ async fn main() -> Result<()> {
         Some(Commands::Setup) => cmd_setup().await,
         Some(Commands::DetectIpv6) => cmd_detect_ipv6(),
         Some(Commands::Wallet { action }) => cmd_wallet(action).await,
-        Some(Commands::DeployRequests { rpc_url, chain_id, private_key }) => {
-            cmd_deploy_requests(&rpc_url, chain_id, &private_key).await
+        Some(Commands::DeployContracts { rpc_url, chain_id, operator_key, ecies_key, region, capacity }) => {
+            cmd_deploy_contracts(&rpc_url, chain_id, &operator_key, &ecies_key, &region, capacity).await
         }
         Some(Commands::Run { host, port }) => {
             cmd_run(&config, host, port).await
@@ -610,35 +622,85 @@ async fn cmd_wallet(action: WalletAction) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_deploy_requests(rpc_url: &str, chain_id: u64, key_path: &PathBuf) -> Result<()> {
-    let private_key = read_private_key(key_path)?;
-    let address = get_wallet_address(&private_key)?;
-
-    println!("Deploying BrokerRequests contract...");
-    println!("  RPC URL:  {}", rpc_url);
-    println!("  Chain ID: {}", chain_id);
-    println!("  Deployer: 0x{:x}", address);
-    println!();
-
-    // Check balance first
-    let balance = get_wallet_balance(rpc_url, address).await?;
-    println!("  Balance:  {}", format_eth(balance));
-
-    if balance.as_u128() < MIN_DEPLOYMENT_BALANCE {
+async fn cmd_deploy_contracts(
+    rpc_url: &str,
+    chain_id: u64,
+    operator_key_path: &PathBuf,
+    ecies_key_path: &PathBuf,
+    region: &str,
+    capacity: u64,
+) -> Result<()> {
+    // Validate inputs before attempting anything
+    if !operator_key_path.exists() {
+        anyhow::bail!("Operator key file not found: {}", operator_key_path.display());
+    }
+    if !ecies_key_path.exists() {
         anyhow::bail!(
-            "Insufficient balance. Need at least {} to deploy.",
-            format_eth(MIN_DEPLOYMENT_BALANCE.into())
+            "ECIES key file not found: {}\nGenerate one with: blockhost-broker generate-key -o {}",
+            ecies_key_path.display(),
+            ecies_key_path.display()
         );
     }
 
-    println!("\nSending deployment transaction...");
+    let private_key = read_private_key(operator_key_path)?;
+    let address = get_wallet_address(&private_key)?;
+    let ecies_pubkey = read_ecies_pubkey(ecies_key_path)?;
+
+    println!("Deploying BrokerRequests contract");
+    println!("=================================");
+    println!("  RPC URL:          {}", rpc_url);
+    println!("  Chain ID:         {}", chain_id);
+    println!("  Operator address: 0x{:x}", address);
+    println!();
+
+    // Check balance
+    let balance = get_wallet_balance(rpc_url, address).await?;
+    println!("  Balance:          {}", format_eth(balance));
+
+    if balance.as_u128() < MIN_DEPLOYMENT_BALANCE {
+        eprintln!();
+        eprintln!("Insufficient balance for deployment.");
+        eprintln!("Fund this address: 0x{:x}", address);
+        eprintln!("Minimum required:  {}", format_eth(MIN_DEPLOYMENT_BALANCE.into()));
+        std::process::exit(1);
+    }
+
+    println!();
+    println!("Sending deployment transaction...");
 
     let contract_address = deploy_broker_requests(rpc_url, chain_id, &private_key).await?;
 
-    println!("\nContract deployed successfully!");
-    println!("Address: 0x{:x}", contract_address);
-    println!("\nAdd this to your config.toml:");
+    println!();
+    println!("========================================");
+    println!("  Deployment Summary");
+    println!("========================================");
+    println!("  Operator address:         0x{:x}", address);
+    println!("  BrokerRequests contract:  0x{:x}", contract_address);
+    println!("  ECIES public key:         {}", ecies_pubkey);
+    if !region.is_empty() {
+        println!("  Region:                   {}", region);
+    }
+    println!("  Capacity:                 {}", if capacity == 0 { "unlimited".to_string() } else { capacity.to_string() });
+    println!();
+    println!("Config snippet for /etc/blockhost-broker/config.toml:");
+    println!();
+    println!("  [onchain]");
+    println!("  enabled = true");
+    println!("  rpc_url = \"{}\"", rpc_url);
+    println!("  chain_id = {}", chain_id);
+    println!("  private_key_file = \"{}\"", operator_key_path.display());
+    println!("  ecies_private_key_file = \"{}\"", ecies_key_path.display());
     println!("  requests_contract = \"0x{:x}\"", contract_address);
+    println!("  poll_interval_ms = 5000");
+    println!();
+    println!("To complete setup, register your broker with the registry owner.");
+    println!("Provide them with:");
+    println!("  - Operator address:        0x{:x}", address);
+    println!("  - BrokerRequests contract:  0x{:x}", contract_address);
+    println!("  - ECIES public key:         {}", ecies_pubkey);
+    if !region.is_empty() {
+        println!("  - Region:                   {}", region);
+    }
 
     Ok(())
 }
@@ -651,22 +713,22 @@ async fn cmd_setup() -> Result<()> {
     println!("===========================================\n");
 
     let config_dir = PathBuf::from("/etc/blockhost-broker");
-    let deployer_key_path = config_dir.join("deployer.key");
+    let operator_key_path = config_dir.join("operator.key");
     let ecies_key_path = config_dir.join("ecies.key");
     let config_path = config_dir.join("config.toml");
 
     // Step 1: Create directories
     std::fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-    // Step 2: Check/generate deployer key
-    println!("Step 1: Ethereum Deployer Key");
+    // Step 2: Check/generate operator key
+    println!("Step 1: Ethereum Operator Key");
     println!("-----------------------------");
 
-    let private_key = if deployer_key_path.exists() {
-        println!("Found existing deployer key at {}", deployer_key_path.display());
-        read_private_key(&deployer_key_path)?
+    let private_key = if operator_key_path.exists() {
+        println!("Found existing operator key at {}", operator_key_path.display());
+        read_private_key(&operator_key_path)?
     } else {
-        print!("No deployer key found. Generate new key? [Y/n]: ");
+        print!("No operator key found. Generate new key? [Y/n]: ");
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -675,8 +737,8 @@ async fn cmd_setup() -> Result<()> {
 
         if input.is_empty() || input == "y" || input == "yes" {
             let key = generate_private_key();
-            write_private_key(&deployer_key_path, &key)?;
-            println!("Generated new key at {}", deployer_key_path.display());
+            write_private_key(&operator_key_path, &key)?;
+            println!("Generated new key at {}", operator_key_path.display());
             key
         } else {
             print!("Enter private key (hex, with or without 0x prefix): ");
@@ -684,7 +746,7 @@ async fn cmd_setup() -> Result<()> {
             let mut key = String::new();
             io::stdin().read_line(&mut key)?;
             let key = key.trim().to_string();
-            write_private_key(&deployer_key_path, &key)?;
+            write_private_key(&operator_key_path, &key)?;
             key
         }
     };
@@ -884,7 +946,7 @@ private_key_file = "{}"
 ecies_private_key_file = "{}"
 {}poll_interval_ms = 5000
 "#,
-        deployer_key_path.display(),
+        operator_key_path.display(),
         ecies_key_path.display(),
         if let Some(ref addr) = requests_contract {
             format!("requests_contract = \"{}\"\n", addr)

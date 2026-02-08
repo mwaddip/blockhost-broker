@@ -5,7 +5,7 @@ set -e
 
 CONFIG_DIR="/etc/blockhost-broker"
 DATA_DIR="/var/lib/blockhost-broker"
-DEPLOYER_KEY="$CONFIG_DIR/deployer.key"
+OPERATOR_KEY="$CONFIG_DIR/operator.key"
 ECIES_KEY="$CONFIG_DIR/ecies.key"
 WG_PRIVATE_KEY="$CONFIG_DIR/wg-private.key"
 WG_PUBLIC_KEY="$CONFIG_DIR/wg-public.key"
@@ -16,6 +16,9 @@ CHAIN_ID="11155111"
 
 case "$1" in
     configure)
+        # $2 is the previously installed version (empty on fresh install)
+        PREVIOUS_VERSION="$2"
+
         # Create directories
         if [ ! -d "$CONFIG_DIR" ]; then
             mkdir -p "$CONFIG_DIR"
@@ -26,6 +29,18 @@ case "$1" in
             mkdir -p "$DATA_DIR"
             chmod 750 "$DATA_DIR"
         fi
+
+        # --- Upgrade path: binary replaced, just restart the service ---
+        if [ -n "$PREVIOUS_VERSION" ]; then
+            echo "Upgrading blockhost-broker from $PREVIOUS_VERSION — preserving existing configuration"
+            if systemctl is-active --quiet blockhost-broker 2>/dev/null; then
+                systemctl restart blockhost-broker
+                echo "Service restarted"
+            fi
+            exit 0
+        fi
+
+        # --- Fresh install path below ---
 
         # Configure sysctl for IPv6 forwarding and NDP proxy
         SYSCTL_CONF="/etc/sysctl.d/99-blockhost-broker.conf"
@@ -46,7 +61,6 @@ SYSCTL_EOF
 
         # Configure UFW rules if UFW is installed and active
         if command -v ufw >/dev/null 2>&1; then
-            # Get WireGuard interface and port from debconf or defaults
             db_get blockhost-broker/wg-interface
             UFW_WG_IFACE="${RET:-wg-broker}"
             db_get blockhost-broker/wg-port
@@ -54,12 +68,9 @@ SYSCTL_EOF
             db_get blockhost-broker/upstream-interface
             UFW_UPSTREAM="${RET}"
 
-            # Allow WireGuard UDP port
             ufw allow "${UFW_WG_PORT}/udp" comment "Blockhost WireGuard" >/dev/null 2>&1 || true
 
-            # If upstream interface is specified, add forwarding rules
             if [ -n "$UFW_UPSTREAM" ]; then
-                # Allow forwarding between WireGuard and upstream interfaces
                 ufw route allow in on "$UFW_WG_IFACE" out on "$UFW_UPSTREAM" comment "Blockhost forward WG->upstream" >/dev/null 2>&1 || true
                 ufw route allow in on "$UFW_UPSTREAM" out on "$UFW_WG_IFACE" comment "Blockhost forward upstream->WG" >/dev/null 2>&1 || true
                 echo "Configured UFW forwarding rules for $UFW_WG_IFACE <-> $UFW_UPSTREAM"
@@ -68,43 +79,19 @@ SYSCTL_EOF
             echo "Configured UFW to allow WireGuard on port $UFW_WG_PORT/udp"
         fi
 
-        # Handle private key setup
-        db_get blockhost-broker/private-key-action
-        KEY_ACTION="$RET"
-
-        case "$KEY_ACTION" in
-            generate)
-                if [ ! -f "$DEPLOYER_KEY" ]; then
-                    # Generate new key using the binary
-                    /usr/bin/blockhost-broker wallet generate -o "$DEPLOYER_KEY" 2>/dev/null || {
-                        # Fallback: generate with openssl
-                        openssl rand -hex 32 > "$DEPLOYER_KEY"
-                        chmod 600 "$DEPLOYER_KEY"
-                    }
-                    echo "Generated new deployer key at $DEPLOYER_KEY"
-                fi
-                ;;
-            provide)
-                db_get blockhost-broker/private-key
-                if [ -n "$RET" ]; then
-                    # Remove 0x prefix if present
-                    KEY=$(echo "$RET" | sed 's/^0x//')
-                    echo "$KEY" > "$DEPLOYER_KEY"
-                    chmod 600 "$DEPLOYER_KEY"
-                    echo "Saved provided private key to $DEPLOYER_KEY"
-                fi
-                # Clear the password from debconf
-                db_reset blockhost-broker/private-key
-                ;;
-            skip)
-                echo "Skipping private key setup. Configure manually later."
-                ;;
-        esac
+        # Generate operator key if not present
+        if [ ! -f "$OPERATOR_KEY" ]; then
+            /usr/bin/blockhost-broker wallet generate -o "$OPERATOR_KEY" 2>/dev/null || {
+                openssl rand -hex 32 > "$OPERATOR_KEY"
+                chmod 600 "$OPERATOR_KEY"
+            }
+            echo "Generated new operator key at $OPERATOR_KEY"
+        fi
 
         # Get wallet address if key exists
         WALLET_ADDRESS=""
-        if [ -f "$DEPLOYER_KEY" ]; then
-            WALLET_ADDRESS=$(/usr/bin/blockhost-broker wallet address -k "$DEPLOYER_KEY" 2>/dev/null || echo "")
+        if [ -f "$OPERATOR_KEY" ]; then
+            WALLET_ADDRESS=$(/usr/bin/blockhost-broker wallet address -k "$OPERATOR_KEY" 2>/dev/null || echo "")
         fi
 
         # Generate WireGuard keys if needed
@@ -146,53 +133,13 @@ SYSCTL_EOF
         db_get blockhost-broker/upstream-interface
         UPSTREAM_INTERFACE="$RET"
 
-        # Handle contract deployment
+        # Get existing contract address if provided
         REQUESTS_CONTRACT=""
-        db_get blockhost-broker/deploy-contract
-        DEPLOY_CONTRACT="$RET"
+        db_get blockhost-broker/existing-contract
+        REQUESTS_CONTRACT="$RET"
 
-        if [ "$DEPLOY_CONTRACT" = "true" ] && [ -f "$DEPLOYER_KEY" ]; then
-            echo "Checking wallet balance..."
-            BALANCE=$(/usr/bin/blockhost-broker wallet balance -k "$DEPLOYER_KEY" 2>/dev/null | grep "Balance:" | awk '{print $2}' || echo "0")
-
-            # Simple check - if balance contains "0.00000" assume insufficient
-            if echo "$BALANCE" | grep -q "^0\.0000"; then
-                db_subst blockhost-broker/fund-wallet ADDRESS "$WALLET_ADDRESS"
-                db_subst blockhost-broker/fund-wallet BALANCE "$BALANCE"
-                db_input critical blockhost-broker/fund-wallet || true
-                db_go || true
-
-                # Re-check balance
-                BALANCE=$(/usr/bin/blockhost-broker wallet balance -k "$DEPLOYER_KEY" 2>/dev/null | grep "Balance:" | awk '{print $2}' || echo "0")
-            fi
-
-            echo "Deploying BrokerRequests contract..."
-            DEPLOY_OUTPUT=$(/usr/bin/blockhost-broker deploy-requests \
-                --rpc-url "$RPC_URL" \
-                --chain-id "$CHAIN_ID" \
-                --private-key "$DEPLOYER_KEY" 2>&1) || {
-                echo "Warning: Contract deployment failed:"
-                echo "$DEPLOY_OUTPUT"
-                echo ""
-                echo "You can deploy manually later with:"
-                echo "  blockhost-broker deploy-requests --rpc-url $RPC_URL --chain-id $CHAIN_ID --private-key $DEPLOYER_KEY"
-            }
-
-            # Extract contract address from output
-            REQUESTS_CONTRACT=$(echo "$DEPLOY_OUTPUT" | grep "^Address:" | awk '{print $2}' || echo "")
-
-            if [ -n "$REQUESTS_CONTRACT" ]; then
-                db_subst blockhost-broker/contract-deployed CONTRACT_ADDRESS "$REQUESTS_CONTRACT"
-                db_input high blockhost-broker/contract-deployed || true
-                db_go || true
-            fi
-        else
-            db_get blockhost-broker/existing-contract
-            REQUESTS_CONTRACT="$RET"
-        fi
-
-        # Write configuration file
-        if [ ! -f "$CONFIG_FILE" ] || [ "$1" = "reconfigure" ]; then
+        # Write configuration file (fresh install only)
+        if [ ! -f "$CONFIG_FILE" ]; then
             cat > "$CONFIG_FILE" << EOF
 # Blockhost Broker Configuration
 # Generated during package installation
@@ -219,7 +166,7 @@ path = "$DATA_DIR/ipam.db"
 enabled = true
 rpc_url = "$RPC_URL"
 chain_id = $CHAIN_ID
-private_key_file = "$DEPLOYER_KEY"
+private_key_file = "$OPERATOR_KEY"
 ecies_private_key_file = "$ECIES_KEY"
 EOF
 
@@ -231,19 +178,13 @@ EOF
 
             echo "poll_interval_ms = 5000" >> "$CONFIG_FILE"
 
-            # Add upstream_interface if specified (for NDP proxy)
             if [ -n "$UPSTREAM_INTERFACE" ]; then
-                # Insert after [wireguard] section's public_endpoint line
                 sed -i "/^public_endpoint = /a upstream_interface = \"$UPSTREAM_INTERFACE\"" "$CONFIG_FILE"
             fi
 
             chmod 640 "$CONFIG_FILE"
             echo "Configuration written to $CONFIG_FILE"
         fi
-
-        # Show setup complete message
-        db_input high blockhost-broker/setup-complete || true
-        db_go || true
 
         # Summary
         echo ""
@@ -252,21 +193,19 @@ EOF
         echo "=========================================="
         echo ""
         if [ -n "$WALLET_ADDRESS" ]; then
-            echo "Operator address: $WALLET_ADDRESS"
-        fi
-        if [ -n "$REQUESTS_CONTRACT" ]; then
-            echo "Requests contract: $REQUESTS_CONTRACT"
+            echo "Operator wallet: $WALLET_ADDRESS"
         fi
         if [ -f "$ECIES_KEY" ]; then
-            ECIES_PUBKEY=$(/usr/bin/blockhost-broker generate-key -o /dev/null 2>&1 | grep "Public key" | awk '{print $NF}' || echo "Run: blockhost-broker generate-key -o /tmp/test to see format")
-            echo "ECIES public key: (check $ECIES_KEY)"
+            echo "ECIES key: $ECIES_KEY"
         fi
         if [ -f "$WG_PUBLIC_KEY" ]; then
             echo "WireGuard public key: $(cat $WG_PUBLIC_KEY)"
         fi
         echo ""
-        echo "To start the broker:"
-        echo "  systemctl enable --now blockhost-broker"
+        echo "Next steps:"
+        echo "  1. Deploy contracts: blockhost-broker deploy-contracts"
+        echo "  2. Update config:    /etc/blockhost-broker/config.toml"
+        echo "  3. Start service:    systemctl enable --now blockhost-broker"
         echo ""
         ;;
 esac

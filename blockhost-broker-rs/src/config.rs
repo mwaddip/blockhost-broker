@@ -51,6 +51,9 @@ pub struct OnchainConfig {
     #[serde(default)]
     pub legacy_requests_contracts: Vec<String>,
 
+    /// Test BrokerRequests contract address (allocations auto-expire in 24h).
+    pub test_requests_contract: Option<String>,
+
     /// Poll interval for pending requests (milliseconds).
     pub poll_interval_ms: u64,
 }
@@ -61,11 +64,12 @@ impl Default for OnchainConfig {
             enabled: false,
             rpc_url: "https://ethereum-sepolia-rpc.publicnode.com".to_string(),
             chain_id: 11155111,
-            private_key_file: PathBuf::from("/etc/blockhost-broker/deployer.key"),
+            private_key_file: PathBuf::from("/etc/blockhost-broker/operator.key"),
             ecies_private_key_file: PathBuf::from("/etc/blockhost-broker/ecies.key"),
             registry_contract: None,
             requests_contract: None,
             legacy_requests_contracts: Vec::new(),
+            test_requests_contract: None,
             poll_interval_ms: 5000,
         }
     }

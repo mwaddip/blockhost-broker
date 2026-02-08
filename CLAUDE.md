@@ -31,9 +31,14 @@ Environment variables should be in `~/projects/sharedenv/blockhost.env` (not com
 - **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
 - **BrokerRequests**: `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
 
+**Test (CI — allocations auto-expire in 24h):**
+- **BrokerRegistry**: `0x2C454Add607817c292f02DE37074c7Fb5F5BfCD8`
+- **BrokerRequests**: `0x91cABa74E1e3005074bDF882BBf59c7CbC61a410`
+
 V2 adds overwrite-on-duplicate, capacity tracking, and re-registration support. Deployed via `contracts-foundry/script/DeployV2.s.sol`.
 
 Registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
+Test registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry-testnet.json
 
 ## Broker Server (95.179.128.177)
 
@@ -87,6 +92,7 @@ Components that must stay in sync:
 - `blockhost-broker-rs/contracts/abi/*.json` - JSON ABI files for contract bindings
 - `contracts-foundry/src/` - Solidity contract source (canonical)
 - `registry.json` - Must point to the active BrokerRegistry address
+- `registry-testnet.json` - Must point to the test BrokerRegistry address
 
 Common breaking changes to watch for:
 - Contract function signature changes
@@ -97,6 +103,8 @@ V2 contract additions (must be present in both Rust ABI JSON and Python client A
 - `getAvailableCapacity()`, `totalCapacity()`, `_activeCount()`, `_pendingCount()`, `setTotalCapacity(uint256)`
 
 The broker config supports `legacy_requests_contracts` — a list of old BrokerRequests addresses that the broker continues to monitor (read-only polling, no new approvals). This keeps existing allocations visible during migration.
+
+The broker config supports `test_requests_contract` — a single BrokerRequests address used for CI/integration testing. Allocations from this contract are tagged `is_test=1` and auto-expire after 24 hours.
 
 ## Project Structure
 
@@ -109,7 +117,8 @@ blockhost-broker/
 │   └── build-deb.sh           # Client .deb builder
 ├── contracts/                 # Solidity sources
 ├── contracts-foundry/         # Foundry project for deployment
-└── registry.json              # Remote config for registry address
+├── registry.json              # Remote config for registry address
+└── registry-testnet.json      # Remote config for test registry address
 ```
 
 ## Architecture

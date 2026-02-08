@@ -49,7 +49,7 @@ rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 chain_id = 11155111
 
 # Path to operator private key (hex-encoded)
-private_key_file = "/etc/blockhost-broker/deployer.key"
+private_key_file = "/etc/blockhost-broker/operator.key"
 
 # Path to ECIES private key for encryption
 # Generate with: blockhost-broker generate-key -o /etc/blockhost-broker/ecies.key

@@ -85,6 +85,7 @@ pub struct OnchainMonitor {
     primary_contract: BrokerRequestsContract<SignerMiddleware>,
     primary_address: String,
     legacy_contracts: Vec<(String, BrokerRequestsContract<SignerMiddleware>)>,
+    test_contract: Option<(String, BrokerRequestsContract<SignerMiddleware>)>,
     shutdown_rx: watch::Receiver<bool>,
     shutdown_tx: watch::Sender<bool>,
     pending_verifications: Vec<PendingVerification>,
@@ -148,6 +149,17 @@ impl OnchainMonitor {
             legacy_contracts.push((legacy_addr_str.to_lowercase(), legacy_contract));
         }
 
+        // Initialize test contract
+        let test_contract = if let Some(test_addr_str) = &onchain_config.test_requests_contract {
+            let test_addr: Address = test_addr_str
+                .parse()
+                .map_err(|_| MonitorError::Config(format!("Invalid test contract address: {}", test_addr_str)))?;
+            let test_contract_instance = BrokerRequestsContract::new(test_addr, client.clone());
+            Some((test_addr_str.to_lowercase(), test_contract_instance))
+        } else {
+            None
+        };
+
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         // Migrate legacy last_processed_id if needed
@@ -177,6 +189,7 @@ impl OnchainMonitor {
             primary_contract,
             primary_address: requests_contract_addr.to_lowercase(),
             legacy_contracts,
+            test_contract,
             shutdown_rx,
             shutdown_tx,
             pending_verifications: Vec::new(),
@@ -188,12 +201,18 @@ impl OnchainMonitor {
         info!(
             contract = %self.primary_address,
             legacy_count = self.legacy_contracts.len(),
+            has_test_contract = self.test_contract.is_some(),
             poll_interval_ms = %self.onchain_config.poll_interval_ms,
             "Starting on-chain monitor"
         );
 
         // Sync on-chain capacity with config
         self.sync_capacity().await;
+
+        // Sync test contract capacity
+        if let Some((addr, contract)) = &self.test_contract {
+            self.sync_capacity_for_contract(contract, addr).await;
+        }
 
         let poll_interval = Duration::from_millis(self.onchain_config.poll_interval_ms);
 
@@ -212,7 +231,15 @@ impl OnchainMonitor {
                         }
                     }
 
+                    // Poll test contract
+                    if let Some((addr, contract)) = &self.test_contract.clone() {
+                        if let Err(e) = self.poll_requests_for_contract(contract, addr).await {
+                            error!(contract = %addr, error = %e, "Error polling test contract");
+                        }
+                    }
+
                     self.check_pending_verifications().await;
+                    self.expire_test_allocations().await;
                 }
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
@@ -272,6 +299,125 @@ impl OnchainMonitor {
             }
             Err(e) => {
                 warn!(error = %e, "Failed to confirm setTotalCapacity");
+            }
+        }
+    }
+
+    /// Sync capacity for a specific contract (used for test contract).
+    async fn sync_capacity_for_contract(
+        &self,
+        contract: &BrokerRequestsContract<SignerMiddleware>,
+        contract_address: &str,
+    ) {
+        let desired = self.broker_config.max_allocations.unwrap_or(0);
+        let on_chain = match contract.total_capacity().call().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(contract = contract_address, error = %e, "Failed to read on-chain totalCapacity for test contract");
+                return;
+            }
+        };
+
+        let on_chain_u64 = on_chain.as_u64();
+        if on_chain_u64 == desired {
+            return;
+        }
+
+        info!(
+            contract = contract_address,
+            on_chain = on_chain_u64,
+            desired = desired,
+            "Syncing on-chain totalCapacity for test contract"
+        );
+
+        let call = contract.set_total_capacity(U256::from(desired));
+        let pending_tx = match call.send().await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(contract = contract_address, error = %e, "Failed to send setTotalCapacity for test contract");
+                return;
+            }
+        };
+
+        match pending_tx.await {
+            Ok(Some(receipt)) if receipt.status == Some(1.into()) => {
+                info!(contract = contract_address, "Test contract totalCapacity updated to {}", desired);
+            }
+            Ok(_) => {
+                warn!(contract = contract_address, "setTotalCapacity transaction failed for test contract");
+            }
+            Err(e) => {
+                warn!(contract = contract_address, error = %e, "Failed to confirm setTotalCapacity for test contract");
+            }
+        }
+    }
+
+    /// Check if a contract address is the test contract.
+    fn is_test_contract(&self, contract_address: &str) -> bool {
+        self.test_contract
+            .as_ref()
+            .map(|(addr, _)| addr == contract_address)
+            .unwrap_or(false)
+    }
+
+    /// Expire test allocations that have passed their expires_at time.
+    async fn expire_test_allocations(&mut self) {
+        let expired = {
+            let ipam = self.ipam.lock().await;
+            match ipam.get_expired_test_allocations().await {
+                Ok(allocations) => allocations,
+                Err(e) => {
+                    error!(error = %e, "Failed to query expired test allocations");
+                    return;
+                }
+            }
+        };
+
+        if expired.is_empty() {
+            return;
+        }
+
+        info!(count = expired.len(), "Expiring test allocations");
+
+        for allocation in expired {
+            let nft_contract: Address = match allocation.nft_contract.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    error!(nft_contract = %allocation.nft_contract, "Invalid NFT contract address in expired allocation");
+                    continue;
+                }
+            };
+
+            // Use the test contract for on-chain release
+            let contract = match &self.test_contract {
+                Some((_, c)) => c,
+                None => {
+                    error!("Test contract not configured but test allocation found");
+                    continue;
+                }
+            };
+
+            info!(
+                prefix = %allocation.prefix,
+                nft_contract = %allocation.nft_contract,
+                "Auto-expiring test allocation"
+            );
+
+            // Remove any pending verification for this allocation
+            self.pending_verifications.retain(|pv| {
+                pv.nft_contract != nft_contract
+            });
+
+            if let Err(e) = self
+                .release_allocation(nft_contract, &allocation.prefix.to_string(), &allocation.pubkey, contract)
+                .await
+            {
+                error!(
+                    prefix = %allocation.prefix,
+                    nft_contract = %allocation.nft_contract,
+                    error = %e,
+                    "Failed to release expired test allocation"
+                );
             }
         }
     }
@@ -429,11 +575,13 @@ impl OnchainMonitor {
             updated
         } else {
             // New allocation
+            let is_test = self.is_test_contract(contract_address);
             let allocation = match ipam
                 .allocate(
                     &payload.wg_pubkey,
                     &nft_contract_str,
                     None,
+                    is_test,
                 )
                 .await
             {
@@ -670,6 +818,11 @@ impl OnchainMonitor {
             return &self.primary_contract;
         }
         for (addr, contract) in &self.legacy_contracts {
+            if addr == contract_address {
+                return contract;
+            }
+        }
+        if let Some((addr, contract)) = &self.test_contract {
             if addr == contract_address {
                 return contract;
             }

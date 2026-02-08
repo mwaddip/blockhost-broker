@@ -199,6 +199,28 @@ pub async fn deploy_broker_requests(
     Ok(contract_address)
 }
 
+/// Read ECIES private key file and derive the uncompressed public key (65 bytes, hex).
+pub fn read_ecies_pubkey(path: &Path) -> Result<String> {
+    use crate::crypto::EciesEncryption;
+
+    if !path.exists() {
+        return Err(anyhow!("ECIES key file not found: {}", path.display()));
+    }
+
+    let metadata = std::fs::metadata(path)
+        .context("Failed to read ECIES key file metadata")?;
+    if metadata.len() == 0 {
+        return Err(anyhow!("ECIES key file is empty: {}", path.display()));
+    }
+    if metadata.len() > 256 {
+        return Err(anyhow!("ECIES key file is too large (expected ~64 hex chars): {}", path.display()));
+    }
+
+    let enc = EciesEncryption::from_file(path)
+        .map_err(|e| anyhow!("Failed to load ECIES key: {}", e))?;
+    Ok(enc.public_key_hex())
+}
+
 /// Generate a new Ethereum private key.
 pub fn generate_private_key() -> String {
     use rand::Rng;

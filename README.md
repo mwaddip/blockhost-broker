@@ -46,10 +46,7 @@ Allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard tunnels. Au
 - An IPv6 prefix routed or tunneled to your VPS (see below)
 - WireGuard kernel module (`wireguard-tools` package)
 - Rust toolchain (for building from source)
-- Foundry (for deploying smart contracts)
-- Two Ethereum wallets funded with Sepolia ETH:
-  - **Deployer wallet** — owns the BrokerRegistry, registers brokers
-  - **Operator wallet** — owns the BrokerRequests contract, signs on-chain responses
+- An Ethereum wallet funded with Sepolia ETH (the **operator wallet** — owns the BrokerRequests contract, signs on-chain responses)
 
 ### 2. Getting IPv6 Address Space
 
@@ -111,33 +108,31 @@ ufw route allow in on wg-broker out on <tunnel-interface>
 ufw route allow in on <tunnel-interface> out on wg-broker
 ```
 
-### 4. Deploy Smart Contracts
+### 4. Deploy BrokerRequests Contract
 
-Install [Foundry](https://book.getfoundry.sh/getting-started/installation) and set up environment variables:
-
-```bash
-export DEPLOYER_PRIVATE_KEY=0x...   # Deployer wallet (registry owner)
-export OPERATOR_PRIVATE_KEY=0x...   # Operator wallet (requests contract owner)
-export ECIES_PUBKEY=0x...           # 65-byte uncompressed secp256k1 pubkey (see step 5)
-export BROKER_REGION="eu-west"      # Your region identifier
-export BROKER_CAPACITY=256          # Max concurrent leases (0 = unlimited)
-```
-
-Build, test, and deploy:
+After building the broker (step 5), deploy your BrokerRequests contract:
 
 ```bash
-cd contracts-foundry
-forge build
-forge test
-forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
+blockhost-broker deploy-contracts \
+  --rpc-url https://ethereum-sepolia-rpc.publicnode.com \
+  --chain-id 11155111 \
+  --operator-key /etc/blockhost-broker/operator.key \
+  --ecies-key /etc/blockhost-broker/ecies.key \
+  --region eu-west \
+  --capacity 256
 ```
 
-The deploy script performs three phases:
-1. Deployer wallet deploys `BrokerRegistry`
-2. Operator wallet deploys `BrokerRequests`
-3. Deployer wallet calls `registerBroker()` to register the operator
+This will:
+1. Show your operator wallet address and balance
+2. Deploy the BrokerRequests contract (owned by your operator wallet)
+3. Print a deployment summary with your ECIES public key and a config snippet
 
-Note the contract addresses from the output — you'll need them for configuration.
+If the wallet has insufficient balance, it will print the address to fund and exit.
+
+After deployment, contact the registry owner to register your broker. Provide them with:
+- Operator address
+- BrokerRequests contract address
+- ECIES public key (printed in the deployment summary)
 
 ### 5. Build and Install the Broker
 
@@ -151,22 +146,11 @@ sudo mkdir -p /etc/blockhost-broker /var/lib/blockhost-broker
 # Generate ECIES keypair (used for encrypted request/response payloads)
 sudo ./target/release/blockhost-broker generate-key -o /etc/blockhost-broker/ecies.key
 
-# Copy operator wallet key (the private key for on-chain transactions)
-sudo cp /path/to/operator.key /etc/blockhost-broker/operator.key
-sudo chmod 600 /etc/blockhost-broker/operator.key /etc/blockhost-broker/ecies.key
+# Generate operator wallet key (or copy an existing one)
+sudo ./target/release/blockhost-broker wallet generate -o /etc/blockhost-broker/operator.key
 
 # Install binary
 sudo cp target/release/blockhost-broker /usr/bin/
-```
-
-To get the ECIES public key (needed for contract deployment):
-
-```python
-python3 -c "
-from coincurve import PrivateKey
-sk = PrivateKey(open('/etc/blockhost-broker/ecies.key').read().strip().encode())
-print(sk.public_key.format(compressed=False).hex())
-"
 ```
 
 ### 6. Configure the Broker
@@ -264,7 +248,7 @@ On startup, the broker:
 Optional web dashboard for managing leases.
 
 ```bash
-sudo dpkg -i blockhost-broker-manager_0.1.0_all.deb
+sudo dpkg -i blockhost-broker-manager_0.2.0_all.deb
 sudo systemctl enable --now blockhost-broker-manager
 ```
 
@@ -353,6 +337,12 @@ https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
 - Broker endpoint is only revealed inside encrypted responses
 - Invalid requests are silently rejected (no information leakage)
 - Manager uses wallet-based auth with nonce signing (non-replayable)
+
+## Community
+
+Join the Blockhost Telegram group: https://t.me/BlockHostOS
+
+If you'd like to run a broker and be added to the registry, head there for questions and information.
 
 ## License
 

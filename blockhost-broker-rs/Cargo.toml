@@ -1,6 +1,6 @@
 [package]
 name = "blockhost-broker"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "IPv6 tunnel broker for Blockhost network with on-chain authentication"
 license = "MIT"

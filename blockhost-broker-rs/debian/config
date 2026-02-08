@@ -12,22 +12,15 @@ detect_ipv6_interfaces() {
         head -10
 }
 
-# Only run configuration on fresh install or reconfigure
+# Only run configuration on fresh install or reconfigure (not upgrades)
 case "$1" in
     configure|reconfigure)
-        # Step 1: Private key setup
-        db_input high blockhost-broker/private-key-action || true
-        db_go || true
-
-        db_get blockhost-broker/private-key-action
-        KEY_ACTION="$RET"
-
-        if [ "$KEY_ACTION" = "provide" ]; then
-            db_input critical blockhost-broker/private-key || true
-            db_go || true
+        # $2 is the previously installed version — skip wizard on upgrades
+        if [ -n "$2" ] && [ "$1" != "reconfigure" ]; then
+            exit 0
         fi
 
-        # Step 2: IPv6 configuration
+        # Step 1: IPv6 configuration
         INTERFACES=$(detect_ipv6_interfaces | tr '\n' ', ' | sed 's/,$//' | sed 's/,/, /g')
 
         if [ -n "$INTERFACES" ]; then
@@ -78,15 +71,9 @@ case "$1" in
         db_input medium blockhost-broker/upstream-interface || true
         db_go || true
 
-        # Step 4: Contract deployment decision
-        db_input high blockhost-broker/deploy-contract || true
+        # Step 4: Existing contract address (optional)
+        db_input medium blockhost-broker/existing-contract || true
         db_go || true
-
-        db_get blockhost-broker/deploy-contract
-        if [ "$RET" = "false" ]; then
-            db_input high blockhost-broker/existing-contract || true
-            db_go || true
-        fi
         ;;
 esac
 

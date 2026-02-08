@@ -26,6 +26,8 @@ class Lease:
     nft_contract: str
     allocated_at: str
     endpoint: Optional[str] = None
+    is_test: bool = False
+    expires_at: Optional[str] = None
 
 
 @dataclass
@@ -129,7 +131,8 @@ class BrokerManager:
         try:
             cursor.execute(
                 """
-                SELECT id, prefix, prefix_index, pubkey, nft_contract, allocated_at, endpoint
+                SELECT id, prefix, prefix_index, pubkey, nft_contract, allocated_at, endpoint,
+                       is_test, expires_at
                 FROM allocations
                 ORDER BY id DESC
                 """
@@ -147,6 +150,8 @@ class BrokerManager:
                         nft_contract=row[4],
                         allocated_at=row[5],
                         endpoint=row[6],
+                        is_test=bool(row[7]) if row[7] is not None else False,
+                        expires_at=row[8],
                     )
                 )
             return leases

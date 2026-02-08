@@ -151,9 +151,12 @@ def dashboard():
     broker = get_broker_manager()
     leases = broker.get_leases()
     wallet_info = broker.get_wallet_info()
+    active_leases = [l for l in leases if not l.is_test]
+    test_leases = [l for l in leases if l.is_test]
     return render_template(
         "dashboard.html",
-        leases=leases,
+        leases=active_leases,
+        test_leases=test_leases,
         wallet_address=request.wallet_address,
         wallet_info=wallet_info,
     )
