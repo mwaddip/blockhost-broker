@@ -32,7 +32,8 @@ Registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhos
 
 - **Broker Daemon**: Port 51820 (WireGuard), internal API on 127.0.0.1:8080
 - **Broker Manager**: https://95.179.128.177:8443 (web UI for lease management)
-- **Operator Wallet**: `0x6A5973DDe7E57686122Eb12DA85389c53fe2EE4b`
+- **Operator Wallet**: `0x6A5973DDe7E57686122Eb12DA85389c53fe2EE4b` (key: `/etc/blockhost-broker/operator.key` — contract owner, used for on-chain txs)
+- **Deployer Wallet**: `0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9` (key: `/etc/blockhost-broker/deployer.key` — NOT the contract owner)
 
 ## Development
 
@@ -51,6 +52,18 @@ broker-client status
 broker-client release --wallet-key /path/to/key
 broker-client install
 ```
+
+## Important: Deploy After Server Changes
+
+**Any commit that modifies a server-side component (`blockhost-broker-rs/`) must be followed by building the release binary and deploying it to the broker server:**
+
+```bash
+cd blockhost-broker-rs && cargo build --release
+scp target/release/blockhost-broker linuxuser@95.179.128.177:/tmp/
+ssh linuxuser@95.179.128.177 'sudo mv /tmp/blockhost-broker /usr/bin/ && sudo systemctl restart blockhost-broker'
+```
+
+Verify the service is healthy after deploy with `sudo systemctl status blockhost-broker`.
 
 ## Important: Client/Server Compatibility
 

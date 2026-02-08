@@ -906,13 +906,29 @@ def cmd_request(args: argparse.Namespace) -> int:
 
             if stale:
                 # Stale or undecryptable response — the broker's post-approval
-                # verification will release this allocation. Wait briefly then
-                # fall through to submit a new request.
+                # verification will release the on-chain mapping (up to 2 min).
+                # Poll until the mapping is cleared before submitting a new request.
                 print(
-                    "Stale allocation detected — waiting for broker to release, "
-                    "then submitting new request...",
+                    "Stale allocation detected — waiting for broker to release on-chain...",
                     file=sys.stderr,
                 )
+                release_deadline = time.time() + 180  # 3 min (2 min broker timeout + margin)
+                while time.time() < release_deadline:
+                    check_id = client.get_request_id_for_nft(
+                        broker.requests_contract, args.nft_contract
+                    )
+                    if check_id == 0:
+                        print("On-chain allocation released by broker")
+                        break
+                    elapsed = int(release_deadline - time.time())
+                    print(f"  Still allocated on-chain... (timeout in {elapsed}s)")
+                    time.sleep(max(args.poll_interval, MIN_POLL_INTERVAL))
+                else:
+                    print(
+                        "Broker did not release the stale allocation within timeout",
+                        file=sys.stderr,
+                    )
+                    return 1
                 existing_request_id = 0
         elif status == REQUEST_STATUS_PENDING:
             print("Request pending - waiting for response...")
