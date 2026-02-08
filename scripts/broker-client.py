@@ -443,16 +443,14 @@ class BrokerClient:
         if receipt["status"] != 1:
             raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
 
-        # Parse request ID from logs
+        # Parse request ID from logs — event must exist if tx succeeded
         logs = contract.events.RequestSubmitted().process_receipt(receipt)
-        if logs:
-            return logs[0]["args"]["requestId"]
-
-        # Fallback: query by NFT contract
-        request_id = contract.functions.nftContractToRequestId(
-            Web3.to_checksum_address(nft_contract)
-        ).call()
-        return request_id
+        if not logs:
+            raise RuntimeError(
+                f"Transaction succeeded but no RequestSubmitted event found (tx: {tx_hash.hex()}). "
+                "This should not happen — the RPC node may have returned an incomplete receipt."
+            )
+        return logs[0]["args"]["requestId"]
 
     def get_request_status(
         self, requests_contract: str, request_id: int
