@@ -197,6 +197,24 @@ poll_interval_ms = 5000
 | `max_allocations` | Synced to on-chain `totalCapacity`. Clients check this before requesting. Omit for unlimited. |
 | `upstream_interface` | Set to your tunnel interface name for NDP proxy. Omit if upstream does proper prefix routing. |
 
+#### NDP Proxy (additional configuration for some providers)
+
+Some tunnel providers (e.g. Route64, some SIT tunnels) use NDP (Neighbor Discovery Protocol) to learn which addresses are in use on your prefix. Without NDP proxy, the provider won't know how to route traffic to addresses the broker allocates to clients — packets will arrive at your VPS but never reach the WireGuard peers.
+
+**You need NDP proxy if** your provider assigns a prefix (e.g. `/64`) and expects your server to respond to NDP neighbor solicitations for each address in use. This is common with SIT tunnels and some native IPv6 setups where the provider doesn't add static routes for your prefix.
+
+**You do NOT need NDP proxy if** your provider routes the entire prefix to your server statically (e.g. Hurricane Electric tunnels, most VPS providers with native `/48` or `/64` delegations).
+
+When `upstream_interface` is set in the config, the broker automatically adds and removes NDP proxy entries on that interface as peers are added and removed. No manual `ip -6 neigh add proxy` commands are needed.
+
+To verify NDP proxy is working after allocating a prefix:
+```bash
+# Should show proxy entries for allocated addresses
+ip -6 neigh show proxy dev <upstream-interface>
+```
+
+If you're unsure whether your provider requires NDP, try allocating a test prefix with `upstream_interface` omitted. If the client can't reach the broker's gateway address through the tunnel, add the upstream interface and try again.
+
 ### 7. Run the Broker
 
 ```bash
