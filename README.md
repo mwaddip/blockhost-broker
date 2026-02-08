@@ -2,9 +2,7 @@
 
 IPv6 tunnel broker with on-chain authentication for Blockhost servers.
 
-## Overview
-
-This broker allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard tunnels. Authentication is handled on-chain through NFT contract ownership verification, eliminating the need for API keys or bearer tokens.
+Allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard tunnels. Authentication is handled on-chain through NFT contract ownership verification — no API keys or bearer tokens needed.
 
 ## Architecture
 
@@ -17,15 +15,15 @@ This broker allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard
 │  └──────────────────┘        └──────────────────┘               │
 └─────────────────────────────────────────────────────────────────┘
          ▲                              ▲
-         │ query                        │ request/response
+         │ discover brokers             │ request/response
          │                              │
 ┌────────┴──────────────────────────────┴─────────────────────────┐
 │  BLOCKHOST SERVER (Proxmox)                                     │
 │                                                                 │
 │  broker-client:                                                 │
-│  1. Submits encrypted request on-chain                          │
-│  2. Receives encrypted response with allocation                 │
-│  3. Configures WireGuard tunnel                                 │
+│  1. Queries registry for brokers with capacity                  │
+│  2. Submits encrypted request on-chain                          │
+│  3. Receives encrypted response, configures WireGuard           │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               │ WireGuard
@@ -35,103 +33,159 @@ This broker allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard
 │                                                                 │
 │  - Monitors BrokerRequests contract for new requests            │
 │  - Verifies NFT contract ownership                              │
-│  - Allocates prefix, adds WireGuard peer                        │
+│  - Allocates IPv6 prefix, adds WireGuard peer                   │
 │  - Submits encrypted response on-chain                          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Components
+## Running Your Own Broker
 
-### Smart Contracts (V2)
+### 1. Prerequisites
 
-- **BrokerRegistry** - Global registry of available brokers (owner-managed, supports re-registration)
-- **BrokerRequests** - Per-broker contract for allocation requests/responses
-  - Overwrite semantics: re-submitting from the same NFT contract overwrites the old request (no revert)
-  - On-chain capacity tracking: `totalCapacity`, `_activeCount`, `_pendingCount`, `getAvailableCapacity()`
-  - Supersession guard: prevents approving overwritten requests
+- A Linux VPS with a static IPv4 address (for WireGuard endpoint)
+- An IPv6 prefix routed or tunneled to your VPS (see below)
+- WireGuard kernel module (`wireguard-tools` package)
+- Rust toolchain (for building from source)
+- Foundry (for deploying smart contracts)
+- Two Ethereum wallets funded with Sepolia ETH:
+  - **Deployer wallet** — owns the BrokerRegistry, registers brokers
+  - **Operator wallet** — owns the BrokerRequests contract, signs on-chain responses
 
-### Broker Daemon
+### 2. Getting IPv6 Address Space
 
-Rust service that runs on the broker VPS:
-- Lazy polling for pending requests (no unbounded loops)
-- Verifies requester owns an ERC721 NFT contract (Blockhost installation proof)
-- Manages WireGuard peers and SQLite-based IPAM
-- Silent rejections (invalid requests simply expire)
-- Responds with ECIES-encrypted allocation details
+You need at least a /64 prefix routed to your VPS. Options:
 
-## Installation
+**Route64** (free SIT tunnels) — https://route64.org
+- Sign up, create a SIT tunnel pointed at your VPS IPv4
+- You'll get a /64 prefix (e.g., `2a11:6c7:f04:276::/64`)
+- Route64 uses NDP for address resolution, so NDP proxy is required (the broker handles this automatically)
 
-### From Debian Package
+**Hurricane Electric** (free 6in4 tunnels) — https://tunnelbroker.net
+- Provides /64 and /48 prefixes with proper routing
+- No NDP proxy needed — set `upstream_interface` to empty or omit it
 
-Download the latest release and install:
+**Native IPv6 from your hosting provider**
+- Some VPS providers assign a /64 or /48 natively
+- No tunnel setup needed, no NDP proxy needed
+
+### 3. Server Setup
+
+Install WireGuard and enable IPv6 forwarding:
 
 ```bash
-sudo dpkg -i blockhost-broker_0.1.0_amd64.deb
+apt install wireguard-tools
+
+# Enable IPv6 forwarding and NDP proxy (if using tunnel provider with NDP)
+cat > /etc/sysctl.d/99-blockhost-broker.conf << EOF
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.all.proxy_ndp = 1
+EOF
+sysctl --system
 ```
 
-The package includes an interactive setup wizard that will:
-1. Generate or import an Ethereum private key
-2. Check wallet balance and prompt for funding if needed
-3. Deploy the BrokerRequests contract
-4. Auto-detect IPv6 interfaces
-5. Configure allocation sizes
-6. Set up WireGuard
+If using a SIT tunnel (e.g., Route64), set it up:
 
-To reconfigure:
 ```bash
-sudo dpkg-reconfigure blockhost-broker
+ip tunnel add <tunnel-name> mode sit remote <provider-ipv4> local <your-ipv4> ttl 255
+ip link set <tunnel-name> up
+ip -6 addr add <your-ipv6>::2/64 dev <tunnel-name>
+ip -6 route add ::/0 dev <tunnel-name>
 ```
 
-### From Source
+Create a WireGuard interface (no address needed — the broker routes to peers):
+
+```bash
+wg genkey | tee /etc/blockhost-broker/wg-private.key | wg pubkey > /etc/blockhost-broker/wg-public.key
+chmod 600 /etc/blockhost-broker/wg-private.key
+
+ip link add dev wg-broker type wireguard
+wg set wg-broker listen-port 51820 private-key /etc/blockhost-broker/wg-private.key
+ip link set wg-broker up
+```
+
+If using UFW, allow WireGuard and forwarding:
+
+```bash
+ufw allow 51820/udp comment "WireGuard"
+ufw route allow in on wg-broker out on <tunnel-interface>
+ufw route allow in on <tunnel-interface> out on wg-broker
+```
+
+### 4. Deploy Smart Contracts
+
+Install [Foundry](https://book.getfoundry.sh/getting-started/installation) and set up environment variables:
+
+```bash
+export DEPLOYER_PRIVATE_KEY=0x...   # Deployer wallet (registry owner)
+export OPERATOR_PRIVATE_KEY=0x...   # Operator wallet (requests contract owner)
+export ECIES_PUBKEY=0x...           # 65-byte uncompressed secp256k1 pubkey (see step 5)
+export BROKER_REGION="eu-west"      # Your region identifier
+export BROKER_CAPACITY=256          # Max concurrent leases (0 = unlimited)
+```
+
+Build, test, and deploy:
+
+```bash
+cd contracts-foundry
+forge build
+forge test
+forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
+```
+
+The deploy script performs three phases:
+1. Deployer wallet deploys `BrokerRegistry`
+2. Operator wallet deploys `BrokerRequests`
+3. Deployer wallet calls `registerBroker()` to register the operator
+
+Note the contract addresses from the output — you'll need them for configuration.
+
+### 5. Build and Install the Broker
 
 ```bash
 cd blockhost-broker-rs
 cargo build --release
 
-# Generate ECIES keypair
-./target/release/blockhost-broker generate-key -o /etc/blockhost-broker/ecies.key
+# Create config directory
+sudo mkdir -p /etc/blockhost-broker /var/lib/blockhost-broker
 
-# Run interactive setup
-sudo ./target/release/blockhost-broker setup
+# Generate ECIES keypair (used for encrypted request/response payloads)
+sudo ./target/release/blockhost-broker generate-key -o /etc/blockhost-broker/ecies.key
 
-# Or run daemon directly
-./target/release/blockhost-broker -c /etc/blockhost-broker/config.toml run
+# Copy operator wallet key (the private key for on-chain transactions)
+sudo cp /path/to/operator.key /etc/blockhost-broker/operator.key
+sudo chmod 600 /etc/blockhost-broker/operator.key /etc/blockhost-broker/ecies.key
+
+# Install binary
+sudo cp target/release/blockhost-broker /usr/bin/
 ```
 
-## CLI Commands
+To get the ECIES public key (needed for contract deployment):
 
-```
-blockhost-broker [OPTIONS] [COMMAND]
-
-Commands:
-  run              Run the broker daemon
-  check-config     Validate configuration and exit
-  generate-key     Generate a new ECIES keypair
-  setup            Interactive setup wizard
-  detect-ipv6      Detect IPv6 interfaces
-  wallet           Wallet management (generate, address, balance)
-  deploy-requests  Deploy BrokerRequests contract
-  token            Token management commands
-  status           Show broker status
-  allocations      List allocations
+```python
+python3 -c "
+from coincurve import PrivateKey
+sk = PrivateKey(open('/etc/blockhost-broker/ecies.key').read().strip().encode())
+print(sk.public_key.format(compressed=False).hex())
+"
 ```
 
-## Configuration
+### 6. Configure the Broker
 
-Configuration file: `/etc/blockhost-broker/config.toml`
+Create `/etc/blockhost-broker/config.toml`:
 
 ```toml
 [broker]
-upstream_prefix = "2001:db8::/48"  # Your IPv6 allocation
-allocation_size = 64               # Prefix length per client
-broker_ipv6 = "2001:db8::1"        # Broker's own address
+upstream_prefix = "2a11:6c7:f04:276::/64"  # Your IPv6 prefix
+allocation_size = 120                        # /120 = 256 addresses per client
+broker_ipv6 = "2a11:6c7:f04:276::2"         # Broker's own address in the prefix
+max_allocations = 256                        # Capacity limit (synced on-chain)
 
 [wireguard]
 interface = "wg-broker"
 listen_port = 51820
 private_key_file = "/etc/blockhost-broker/wg-private.key"
-public_endpoint = "your-server.example.com:51820"
-upstream_interface = "sit1"  # For NDP proxy (e.g., sit1, tb25255R64)
+public_endpoint = "your-server-ip:51820"
+upstream_interface = "tb25255R64"  # SIT tunnel interface (omit if not using NDP proxy)
 
 [api]
 listen_host = "127.0.0.1"
@@ -146,43 +200,144 @@ rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 chain_id = 11155111
 private_key_file = "/etc/blockhost-broker/operator.key"
 ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
-registry_contract = "0x..."   # BrokerRegistry address
-requests_contract = "0x..."   # This broker's BrokerRequests address
+registry_contract = "0x..."    # From deploy output
+requests_contract = "0x..."    # From deploy output
 poll_interval_ms = 5000
-legacy_requests_contracts = ["0x..."]  # Old BrokerRequests addresses to keep monitoring
 ```
 
-## On-Chain Authentication Flow
+**Key configuration choices:**
 
-1. **Client** queries `BrokerRegistry` for available brokers, selecting one with available capacity
-2. **Client** generates WireGuard keypair and ECIES keypair
-3. **Client** encrypts request payload with broker's public key
-4. **Client** calls `BrokerRequests.submitRequest(nftContract, encryptedPayload)`
-   - If the NFT contract already has a request, the contract overwrites it (old request marked Expired)
-5. **Broker** detects request via lazy polling
-6. **Broker** verifies:
-   - NFT contract exists and is ERC721
-   - `Ownable.owner() == msg.sender`
-7. **Broker** allocates prefix, adds WireGuard peer
-8. **Broker** encrypts response with client's public key
-9. **Broker** prepends 8-byte request ID prefix to encrypted payload
-10. **Broker** calls `BrokerRequests.submitResponse(requestId, prefixedPayload)`
-11. **Broker** starts 2-minute tunnel verification timer
-12. **Client** strips request ID prefix, decrypts response, configures WireGuard
+| Setting | Description |
+|---------|-------------|
+| `allocation_size` | Prefix length per client. `/120` gives 256 addresses each (fits NDP proxy limit). `/64` gives a full subnet per client but requires proper routing from upstream. |
+| `max_allocations` | Synced to on-chain `totalCapacity`. Clients check this before requesting. Omit for unlimited. |
+| `upstream_interface` | Set to your tunnel interface name for NDP proxy. Omit if upstream does proper prefix routing. |
 
-Invalid requests are silently rejected (no on-chain response, request expires).
+### 7. Run the Broker
 
-**Re-requests:** If a client submits a new request from the same NFT contract, the contract overwrites the old request on-chain. The broker updates the WireGuard public key and returns the same allocation. This allows key rotation without losing the allocated prefix.
+```bash
+# Test configuration
+blockhost-broker -c /etc/blockhost-broker/config.toml check-config
 
-**Stale response detection:** After a server re-install (new ECIES key), the client detects the stale on-chain response via the request ID prefix mismatch and immediately submits a new request (the V2 contract handles the overwrite). The broker's tunnel verification auto-releases the old allocation after 2 minutes if no WireGuard handshake occurs.
+# Run directly
+blockhost-broker -c /etc/blockhost-broker/config.toml run
 
-**Capacity-aware selection:** The client calls `getAvailableCapacity()` on each broker's contract and skips brokers with no capacity, falling back to the next available broker in the registry.
+# Or set up as a systemd service (recommended)
+```
+
+Example systemd unit (`/etc/systemd/system/blockhost-broker.service`):
+
+```ini
+[Unit]
+Description=Blockhost IPv6 Tunnel Broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/blockhost-broker -c /etc/blockhost-broker/config.toml run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/blockhost-broker /etc/wireguard
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now blockhost-broker
+sudo journalctl -u blockhost-broker -f   # Watch logs
+```
+
+On startup, the broker:
+- Syncs `max_allocations` to on-chain `totalCapacity` (if configured)
+- Migrates any legacy per-contract state
+- Begins polling for new requests on the primary and any legacy contracts
+
+### 8. Broker Manager (Web UI)
+
+Optional web dashboard for managing leases.
+
+```bash
+sudo dpkg -i blockhost-broker-manager_0.1.0_all.deb
+sudo systemctl enable --now blockhost-broker-manager
+```
+
+Access at `https://<broker-ip>:8443` (self-signed certificate).
+
+Configure authorized wallets in `/etc/blockhost-broker-manager/auth.json`:
+
+```json
+{
+  "authorized_wallets": [
+    "0xYourWalletAddress"
+  ]
+}
+```
+
+Features:
+- Wallet-based authentication (MetaMask/Web3 nonce signing)
+- View and release active leases
+- Wallet balance display with low-balance warning
+- ETH top-up via MetaMask
+- Configurable session expiry (`SESSION_LIFETIME_HOURS`, default: 1 hour)
+
+## Broker Client
+
+The `broker-client` runs on Blockhost servers (Proxmox) to request IPv6 allocations.
+
+### Installation
+
+```bash
+sudo dpkg -i blockhost-broker-client_0.3.0_all.deb
+```
+
+### Usage
+
+```bash
+# Request an allocation (discovers brokers from on-chain registry)
+broker-client request --nft-contract 0x... --wallet-key /path/to/key
+
+# Check current allocation
+broker-client status
+
+# List available brokers and their capacity
+broker-client list-brokers
+
+# Install persistent WireGuard config (survives reboot)
+broker-client install
+
+# Release allocation (on-chain + local cleanup)
+broker-client release --wallet-key /path/to/key [--cleanup-wg]
+```
+
+The client automatically:
+- Fetches the registry address from GitHub (`registry.json`)
+- Selects a broker with available capacity
+- Encrypts the request with the broker's ECIES public key
+- Polls for the encrypted response and configures WireGuard
+- Detects stale responses (e.g., after server re-install) and re-requests
+
+### How It Works
+
+1. Client queries `BrokerRegistry` for active brokers, picks one with capacity
+2. Generates a WireGuard keypair and encrypts it (along with an ECIES public key) with the broker's public key
+3. Submits the encrypted payload on-chain via `BrokerRequests.submitRequest()`
+4. Broker verifies NFT contract ownership, allocates a prefix, and responds on-chain
+5. Client decrypts the response, configures WireGuard, and saves the allocation to `/etc/blockhost/broker-allocation.json`
+
+Re-requesting from the same NFT contract overwrites the old request — useful for key rotation or recovery after re-install.
 
 ## Contract Addresses (Sepolia Testnet)
 
 **V2 (active):**
 - **BrokerRegistry**: `0x4e020bf35a1b2939E359892D22d96B4A2DAEb93e`
-- **BrokerRequests** (eu-west broker): `0xDE6f2cBB6de279e9f95Cd07B18411d26FEa51546`
+- **BrokerRequests** (eu-west): `0xDE6f2cBB6de279e9f95Cd07B18411d26FEa51546`
 
 **V1 (legacy, still monitored):**
 - **BrokerRequests**: `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
@@ -190,109 +345,13 @@ Invalid requests are silently rejected (no on-chain response, request expires).
 The registry address is published at:
 https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
 
-## Smart Contract Deployment
-
-Using Foundry:
-
-```bash
-cd contracts-foundry
-forge build
-forge test
-
-# Deploy V2 contracts (registry + requests + register broker)
-forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
-```
-
-The `DeployV2.s.sol` script performs a 3-phase deployment:
-1. Deployer key deploys `BrokerRegistry`
-2. Operator key deploys `BrokerRequests`
-3. Deployer key calls `registerBroker()` to register the operator
-
-## Broker Client
-
-The `broker-client` is a standalone Python script for Proxmox servers to request allocations.
-
-### Installation
-
-```bash
-sudo dpkg -i blockhost-broker-client_0.1.0_all.deb
-```
-
-### Commands
-
-```bash
-# Request a new allocation
-broker-client request --nft-contract 0x... --wallet-key /path/to/key
-
-# Check allocation status
-broker-client status
-
-# List available brokers
-broker-client list-brokers
-
-# Install persistent WireGuard config
-broker-client install
-
-# Release allocation (on-chain + local cleanup)
-broker-client release --wallet-key /path/to/key [--cleanup-wg]
-```
-
-The client fetches the registry address automatically from GitHub.
-
-## Broker Manager (Web UI)
-
-A web-based management interface for broker operators.
-
-### Features
-
-- Wallet-based authentication (MetaMask/Web3)
-- Configurable session expiry (default: 1 hour, set via `SESSION_LIFETIME_HOURS`)
-- View active leases
-- Release leases with one click
-- Wallet info display (address, balance, network) with low-balance warning
-- ETH top-up via MetaMask integration
-
-### Installation
-
-```bash
-sudo dpkg -i blockhost-broker-manager_0.1.0_all.deb
-sudo systemctl start blockhost-broker-manager
-```
-
-Access at `https://<broker-ip>:8443` (self-signed certificate).
-
-### Configuration
-
-Authorized wallets: `/etc/blockhost-broker-manager/auth.json`
-
-```json
-{
-  "authorized_wallets": [
-    "0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9"
-  ]
-}
-```
-
-## NDP Proxy
-
-When using a tunnel provider that expects NDP for address resolution (like Route64 SIT tunnels), the broker automatically manages NDP proxy entries:
-
-- Adds proxy entries for all addresses in allocated prefixes (up to 256 per allocation)
-- Removes entries when allocations are released
-- Requires `upstream_interface` to be set in config
-
-The Debian package automatically configures:
-- `net.ipv6.conf.all.forwarding = 1`
-- `net.ipv6.conf.all.proxy_ndp = 1`
-- UFW rules for WireGuard port and interface forwarding
-
 ## Security
 
 - All request/response payloads are ECIES encrypted (secp256k1)
-- WireGuard keys are generated locally, private keys never transmitted
+- WireGuard private keys are generated locally, never transmitted
 - NFT ownership verification ensures only legitimate Blockhost installations can request allocations
-- Broker endpoint is only revealed in encrypted responses
-- Silent rejections prevent information leakage about rejection reasons
+- Broker endpoint is only revealed inside encrypted responses
+- Invalid requests are silently rejected (no information leakage)
 - Manager uses wallet-based auth with nonce signing (non-replayable)
 
 ## License
