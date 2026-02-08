@@ -47,6 +47,15 @@ contract BrokerRequests is Ownable {
     /// @notice Request expiration time (default: 24 hours)
     uint256 public requestExpirationTime = 24 hours;
 
+    /// @notice Maximum capacity (0 = unlimited)
+    uint256 public totalCapacity;
+
+    /// @notice Number of currently approved (allocated) requests
+    uint256 public _activeCount;
+
+    /// @notice Number of currently pending requests
+    uint256 public _pendingCount;
+
     // Events
     event RequestSubmitted(
         uint256 indexed requestId,
@@ -66,7 +75,7 @@ contract BrokerRequests is Ownable {
     constructor() Ownable(msg.sender) {}
 
     /**
-     * @notice Submit an allocation request
+     * @notice Submit an allocation request (overwrites existing request for same NFT contract)
      * @param nftContract Address of the Blockhost AccessCredentialNFT contract
      * @param encryptedPayload ECIES encrypted request data (contains WireGuard pubkey, server pubkey)
      * @return requestId The ID of the submitted request
@@ -77,7 +86,6 @@ contract BrokerRequests is Ownable {
     ) external returns (uint256 requestId) {
         require(nftContract != address(0), "Invalid NFT contract address");
         require(encryptedPayload.length > 0, "Empty payload");
-        require(nftContractToRequestId[nftContract] == 0, "NFT contract already has a request");
 
         // Verify NFT contract exists and is ERC721
         require(_isContract(nftContract), "NFT contract does not exist");
@@ -85,6 +93,19 @@ contract BrokerRequests is Ownable {
 
         // Verify sender owns the NFT contract
         require(_isOwner(nftContract, msg.sender), "Sender does not own NFT contract");
+
+        // Handle overwrite if existing request exists
+        uint256 existingId = nftContractToRequestId[nftContract];
+        if (existingId != 0) {
+            Request storage oldRequest = requests[existingId - 1];
+            if (oldRequest.status == RequestStatus.Pending) {
+                _pendingCount--;
+            } else if (oldRequest.status == RequestStatus.Approved) {
+                _activeCount--;
+            }
+            oldRequest.status = RequestStatus.Expired;
+            oldRequest.respondedAt = block.timestamp;
+        }
 
         requests.push(Request({
             id: requests.length + 1, // 1-indexed
@@ -100,6 +121,7 @@ contract BrokerRequests is Ownable {
         requestId = requests.length; // 1-indexed
         nftContractToRequestId[nftContract] = requestId;
         requesterToRequestIds[msg.sender].push(requestId);
+        _pendingCount++;
 
         emit RequestSubmitted(requestId, msg.sender, nftContract, encryptedPayload);
     }
@@ -120,10 +142,13 @@ contract BrokerRequests is Ownable {
         require(request.status == RequestStatus.Pending, "Request not pending");
         require(block.timestamp <= request.submittedAt + requestExpirationTime, "Request expired");
         require(encryptedPayload.length > 0, "Response requires payload");
+        require(nftContractToRequestId[request.nftContract] == requestId, "Request superseded");
 
         request.status = RequestStatus.Approved;
         request.responsePayload = encryptedPayload;
         request.respondedAt = block.timestamp;
+        _pendingCount--;
+        _activeCount++;
 
         emit ResponseSubmitted(requestId, request.status, encryptedPayload);
     }
@@ -143,6 +168,7 @@ contract BrokerRequests is Ownable {
                 ) {
                     request.status = RequestStatus.Expired;
                     request.respondedAt = block.timestamp;
+                    _pendingCount--;
                     // Clear NFT contract mapping so they can resubmit
                     delete nftContractToRequestId[request.nftContract];
                     emit RequestExpired(requestId);
@@ -180,12 +206,38 @@ contract BrokerRequests is Ownable {
     }
 
     /**
+     * @notice Set total capacity (broker only)
+     * @param _totalCapacity New total capacity (0 = unlimited)
+     */
+    function setTotalCapacity(uint256 _totalCapacity) external onlyOwner {
+        totalCapacity = _totalCapacity;
+    }
+
+    /**
+     * @notice Get available capacity
+     * @return Available capacity (type(uint256).max if unlimited)
+     */
+    function getAvailableCapacity() external view returns (uint256) {
+        if (totalCapacity == 0) return type(uint256).max;
+        uint256 used = _activeCount + _pendingCount;
+        if (used >= totalCapacity) return 0;
+        return totalCapacity - used;
+    }
+
+    /**
      * @notice Release an allocation (allows NFT contract to request again)
      * @param nftContract Address of the NFT contract to release
      */
     function releaseAllocation(address nftContract) external onlyOwner {
         uint256 requestId = nftContractToRequestId[nftContract];
         require(requestId != 0, "No allocation for this NFT contract");
+
+        Request storage request = requests[requestId - 1];
+        if (request.status == RequestStatus.Approved) {
+            _activeCount--;
+        } else if (request.status == RequestStatus.Pending) {
+            _pendingCount--;
+        }
 
         delete nftContractToRequestId[nftContract];
     }

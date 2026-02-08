@@ -45,10 +45,36 @@ contract BrokerRegistryTest is Test {
         registry.registerBroker(operator, requestsContract, hex"aabb", "eu-west", 100);
     }
 
-    function test_registerBroker_revertDuplicateOperator() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
-        vm.expectRevert("Operator already registered");
-        registry.registerBroker(operator, makeAddr("requests2"), VALID_PUBKEY, "eu-west", 100);
+    function test_registerBroker_reRegistration() public {
+        // First registration
+        uint256 id1 = registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        assertEq(id1, 1);
+        assertTrue(registry.getBroker(1).active);
+
+        // Re-register same operator with new requests contract
+        address newRequestsContract = makeAddr("requests2");
+        uint256 id2 = registry.registerBroker(operator, newRequestsContract, VALID_PUBKEY, "us-east", 200);
+        assertEq(id2, 2);
+
+        // Old entry should be deactivated
+        assertFalse(registry.getBroker(1).active);
+
+        // New entry should be active
+        assertTrue(registry.getBroker(2).active);
+        assertEq(registry.getBroker(2).region, "us-east");
+        assertEq(registry.getBroker(2).capacity, 200);
+
+        // Operator mapping should point to new entry
+        assertEq(registry.operatorToBrokerId(operator), 2);
+
+        // Old requests contract mapping should be cleared
+        assertEq(registry.requestsContractToBrokerId(requestsContract), 0);
+
+        // New requests contract mapping should be set
+        assertEq(registry.requestsContractToBrokerId(newRequestsContract), 2);
+
+        // Total count should be 2 (old entry preserved)
+        assertEq(registry.getBrokerCount(), 2);
     }
 
     function test_registerBroker_revertNonOwner() public {

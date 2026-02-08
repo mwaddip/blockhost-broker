@@ -1,6 +1,7 @@
 //! On-chain event monitor for broker requests.
 //!
 //! Uses lazy polling to check for new requests instead of unbounded loops.
+//! Supports a primary contract and optional legacy contracts.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,6 +67,8 @@ struct PendingVerification {
     pubkey: String,
     prefix: String,
     approved_at: Instant,
+    /// Which contract this allocation was approved on.
+    contract_address: String,
 }
 
 /// Monitors BrokerRequests contract for new allocation requests.
@@ -79,7 +82,9 @@ pub struct OnchainMonitor {
     wallet: LocalWallet,
     encryption: EciesEncryption,
     verifier: NftVerifier,
-    contract: BrokerRequestsContract<SignerMiddleware>,
+    primary_contract: BrokerRequestsContract<SignerMiddleware>,
+    primary_address: String,
+    legacy_contracts: Vec<(String, BrokerRequestsContract<SignerMiddleware>)>,
     shutdown_rx: watch::Receiver<bool>,
     shutdown_tx: watch::Sender<bool>,
     pending_verifications: Vec<PendingVerification>,
@@ -95,10 +100,11 @@ impl OnchainMonitor {
         wg: Arc<WireGuardManager>,
     ) -> Result<Self, MonitorError> {
         // Validate config
-        let requests_contract = onchain_config
+        let requests_contract_addr = onchain_config
             .requests_contract
             .as_ref()
-            .ok_or_else(|| MonitorError::Config("requests_contract must be set".to_string()))?;
+            .ok_or_else(|| MonitorError::Config("requests_contract must be set".to_string()))?
+            .clone();
 
         // Initialize provider
         let provider = Provider::<Http>::try_from(&onchain_config.rpc_url)
@@ -123,15 +129,40 @@ impl OnchainMonitor {
         // Initialize verifier
         let verifier = NftVerifier::new(provider.clone());
 
-        // Initialize contract with signing middleware
-        let client = SignerMiddleware::new(provider.clone(), wallet.clone());
-        let client = Arc::new(client);
-        let contract_address: Address = requests_contract
+        // Initialize signing middleware
+        let client = Arc::new(SignerMiddleware::new(provider.clone(), wallet.clone()));
+
+        // Initialize primary contract
+        let primary_address: Address = requests_contract_addr
             .parse()
             .map_err(|_| MonitorError::Config("Invalid requests contract address".to_string()))?;
-        let contract = BrokerRequestsContract::new(contract_address, client);
+        let primary_contract = BrokerRequestsContract::new(primary_address, client.clone());
+
+        // Initialize legacy contracts
+        let mut legacy_contracts = Vec::new();
+        for legacy_addr_str in &onchain_config.legacy_requests_contracts {
+            let legacy_addr: Address = legacy_addr_str
+                .parse()
+                .map_err(|_| MonitorError::Config(format!("Invalid legacy contract address: {}", legacy_addr_str)))?;
+            let legacy_contract = BrokerRequestsContract::new(legacy_addr, client.clone());
+            legacy_contracts.push((legacy_addr_str.to_lowercase(), legacy_contract));
+        }
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Migrate legacy last_processed_id if needed
+        if !onchain_config.legacy_requests_contracts.is_empty() {
+            let ipam_lock = ipam.lock().await;
+            for legacy_addr_str in &onchain_config.legacy_requests_contracts {
+                if let Err(e) = ipam_lock.migrate_last_processed_id(legacy_addr_str).await {
+                    warn!(
+                        contract = legacy_addr_str.as_str(),
+                        error = %e,
+                        "Failed to migrate last_processed_id for legacy contract"
+                    );
+                }
+            }
+        }
 
         Ok(Self {
             onchain_config,
@@ -143,7 +174,9 @@ impl OnchainMonitor {
             wallet,
             encryption,
             verifier,
-            contract,
+            primary_contract,
+            primary_address: requests_contract_addr.to_lowercase(),
+            legacy_contracts,
             shutdown_rx,
             shutdown_tx,
             pending_verifications: Vec::new(),
@@ -153,19 +186,32 @@ impl OnchainMonitor {
     /// Start the on-chain monitor loop.
     pub async fn start(&mut self) -> Result<(), MonitorError> {
         info!(
-            contract = %self.onchain_config.requests_contract.as_ref().unwrap(),
+            contract = %self.primary_address,
+            legacy_count = self.legacy_contracts.len(),
             poll_interval_ms = %self.onchain_config.poll_interval_ms,
             "Starting on-chain monitor"
         );
+
+        // Sync on-chain capacity with config
+        self.sync_capacity().await;
 
         let poll_interval = Duration::from_millis(self.onchain_config.poll_interval_ms);
 
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(poll_interval) => {
-                    if let Err(e) = self.poll_requests().await {
-                        error!("Error polling requests: {}", e);
+                    // Poll primary contract
+                    if let Err(e) = self.poll_requests_for_contract(&self.primary_contract.clone(), &self.primary_address.clone()).await {
+                        error!(contract = %self.primary_address, error = %e, "Error polling primary contract");
                     }
+
+                    // Poll legacy contracts
+                    for (addr, contract) in self.legacy_contracts.clone() {
+                        if let Err(e) = self.poll_requests_for_contract(&contract, &addr).await {
+                            error!(contract = %addr, error = %e, "Error polling legacy contract");
+                        }
+                    }
+
                     self.check_pending_verifications().await;
                 }
                 _ = self.shutdown_rx.changed() => {
@@ -185,11 +231,59 @@ impl OnchainMonitor {
         let _ = self.shutdown_tx.send(true);
     }
 
-    /// Poll for new requests using lazy polling.
-    async fn poll_requests(&mut self) -> Result<(), MonitorError> {
+    /// Sync on-chain totalCapacity with config max_allocations (if explicitly set).
+    /// If max_allocations is not configured, sets totalCapacity to 0 (unlimited).
+    async fn sync_capacity(&self) {
+        let desired = self.broker_config.max_allocations.unwrap_or(0);
+        let on_chain = match self.primary_contract.total_capacity().call().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "Failed to read on-chain totalCapacity");
+                return;
+            }
+        };
+
+        let on_chain_u64 = on_chain.as_u64();
+        if on_chain_u64 == desired {
+            return;
+        }
+
+        info!(
+            on_chain = on_chain_u64,
+            desired = desired,
+            "Syncing on-chain totalCapacity with config"
+        );
+
+        let call = self.primary_contract.set_total_capacity(U256::from(desired));
+        let pending_tx = match call.send().await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, "Failed to send setTotalCapacity transaction");
+                return;
+            }
+        };
+
+        match pending_tx.await {
+            Ok(Some(receipt)) if receipt.status == Some(1.into()) => {
+                info!("On-chain totalCapacity updated to {}", desired);
+            }
+            Ok(_) => {
+                warn!("setTotalCapacity transaction failed or no receipt");
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to confirm setTotalCapacity");
+            }
+        }
+    }
+
+    /// Poll for new requests on a specific contract.
+    async fn poll_requests_for_contract(
+        &mut self,
+        contract: &BrokerRequestsContract<SignerMiddleware>,
+        contract_address: &str,
+    ) -> Result<(), MonitorError> {
         // Get total request count
-        let count: U256 = self
-            .contract
+        let count: U256 = contract
             .get_request_count()
             .call()
             .await
@@ -197,9 +291,9 @@ impl OnchainMonitor {
 
         let count = count.as_u64();
 
-        // Get last processed ID from database
+        // Get last processed ID from database (per-contract)
         let ipam = self.ipam.lock().await;
-        let last_processed = ipam.get_last_processed_id().await?;
+        let last_processed = ipam.get_last_processed_id_for_contract(contract_address).await?;
         drop(ipam);
 
         if count == 0 || last_processed >= count {
@@ -207,6 +301,7 @@ impl OnchainMonitor {
         }
 
         debug!(
+            contract = contract_address,
             last_processed = last_processed,
             total_count = count,
             "Checking for new requests"
@@ -214,8 +309,7 @@ impl OnchainMonitor {
 
         // Process new requests
         for id in (last_processed + 1)..=count {
-            let request = self
-                .contract
+            let request = contract
                 .get_request(U256::from(id))
                 .call()
                 .await
@@ -234,26 +328,32 @@ impl OnchainMonitor {
                         .unwrap_or_else(Utc::now),
                 };
 
-                if let Err(e) = self.process_request(pending).await {
+                if let Err(e) = self.process_request(pending, contract, contract_address).await {
                     // Silent rejection - just log and continue
-                    warn!(request_id = id, error = %e, "Request processing failed (silent rejection)");
+                    warn!(request_id = id, contract = contract_address, error = %e, "Request processing failed (silent rejection)");
                 }
             }
 
-            // Update last processed ID
+            // Update last processed ID (per-contract)
             let ipam = self.ipam.lock().await;
-            ipam.set_last_processed_id(id).await?;
+            ipam.set_last_processed_id_for_contract(contract_address, id).await?;
         }
 
         Ok(())
     }
 
     /// Process a single pending allocation request.
-    async fn process_request(&mut self, request: PendingRequest) -> Result<(), MonitorError> {
+    async fn process_request(
+        &mut self,
+        request: PendingRequest,
+        contract: &BrokerRequestsContract<SignerMiddleware>,
+        contract_address: &str,
+    ) -> Result<(), MonitorError> {
         info!(
             request_id = request.id,
             requester = %request.requester,
             nft_contract = %request.nft_contract,
+            contract = contract_address,
             "Processing request"
         );
 
@@ -312,6 +412,19 @@ impl OnchainMonitor {
                 );
                 return Err(e.into());
             }
+
+            // Remove stale pending_verification for the old pubkey (fix 5e)
+            self.pending_verifications.retain(|pv| {
+                let same_nft = pv.nft_contract == request.nft_contract;
+                if same_nft {
+                    info!(
+                        pubkey = %pv.pubkey,
+                        prefix = %pv.prefix,
+                        "Removing stale pending verification for re-request"
+                    );
+                }
+                !same_nft
+            });
 
             updated
         } else {
@@ -391,7 +504,16 @@ impl OnchainMonitor {
         };
 
         // Submit approval on-chain
-        self.submit_approval(request.id, encrypted_response).await?;
+        if let Err(e) = self.submit_approval(request.id, encrypted_response, contract).await {
+            // Rollback IPAM + WG on failed on-chain submission
+            error!(
+                request_id = request.id,
+                error = %e,
+                "Failed to submit approval on-chain, rolling back allocation"
+            );
+            self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
+            return Err(e);
+        }
 
         // Track for tunnel verification — if no WG handshake within timeout,
         // release the allocation so the client can re-request with a new key.
@@ -400,11 +522,13 @@ impl OnchainMonitor {
             pubkey: payload.wg_pubkey.clone(),
             prefix: allocation.prefix.to_string(),
             approved_at: Instant::now(),
+            contract_address: contract_address.to_string(),
         });
 
         info!(
             request_id = request.id,
             prefix = %allocation.prefix,
+            contract = contract_address,
             "Request approved"
         );
 
@@ -422,12 +546,17 @@ impl OnchainMonitor {
     ///
     /// Prepends the request ID as an 8-byte big-endian prefix before the encrypted
     /// payload so the client can identify stale responses without attempting decryption.
-    async fn submit_approval(&self, request_id: u64, encrypted_payload: Vec<u8>) -> Result<(), MonitorError> {
+    async fn submit_approval(
+        &self,
+        request_id: u64,
+        encrypted_payload: Vec<u8>,
+        contract: &BrokerRequestsContract<SignerMiddleware>,
+    ) -> Result<(), MonitorError> {
         let mut prefixed_payload = Vec::with_capacity(8 + encrypted_payload.len());
         prefixed_payload.extend_from_slice(&request_id.to_be_bytes());
         prefixed_payload.extend(encrypted_payload);
 
-        let tx = self.contract.submit_response(
+        let tx = contract.submit_response(
             U256::from(request_id),
             Bytes::from(prefixed_payload),
         );
@@ -519,8 +648,10 @@ impl OnchainMonitor {
         self.pending_verifications = to_keep;
 
         for pv in to_release {
+            // Resolve which contract to release on
+            let contract = self.resolve_contract(&pv.contract_address);
             if let Err(e) = self
-                .release_allocation(pv.nft_contract, &pv.prefix, &pv.pubkey)
+                .release_allocation(pv.nft_contract, &pv.prefix, &pv.pubkey, contract)
                 .await
             {
                 error!(
@@ -533,12 +664,27 @@ impl OnchainMonitor {
         }
     }
 
+    /// Resolve a contract reference by address string.
+    fn resolve_contract(&self, contract_address: &str) -> &BrokerRequestsContract<SignerMiddleware> {
+        if contract_address == self.primary_address {
+            return &self.primary_contract;
+        }
+        for (addr, contract) in &self.legacy_contracts {
+            if addr == contract_address {
+                return contract;
+            }
+        }
+        // Fallback to primary (shouldn't happen)
+        &self.primary_contract
+    }
+
     /// Release an allocation.
     pub async fn release_allocation(
         &self,
         nft_contract: Address,
         prefix: &str,
         pubkey: &str,
+        contract: &BrokerRequestsContract<SignerMiddleware>,
     ) -> Result<(), MonitorError> {
         // Remove WireGuard peer
         let _ = self.wg.remove_peer(pubkey);
@@ -549,7 +695,7 @@ impl OnchainMonitor {
         drop(ipam);
 
         // Release on-chain
-        let tx = self.contract.release_allocation(nft_contract);
+        let tx = contract.release_allocation(nft_contract);
         let pending_tx = tx.send().await.map_err(|e| MonitorError::Contract(e.to_string()))?;
 
         info!(

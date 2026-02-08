@@ -47,6 +47,10 @@ pub struct OnchainConfig {
     /// BrokerRequests contract address (this broker's instance).
     pub requests_contract: Option<String>,
 
+    /// Legacy BrokerRequests contract addresses to monitor for existing allocations.
+    #[serde(default)]
+    pub legacy_requests_contracts: Vec<String>,
+
     /// Poll interval for pending requests (milliseconds).
     pub poll_interval_ms: u64,
 }
@@ -61,6 +65,7 @@ impl Default for OnchainConfig {
             ecies_private_key_file: PathBuf::from("/etc/blockhost-broker/ecies.key"),
             registry_contract: None,
             requests_contract: None,
+            legacy_requests_contracts: Vec::new(),
             poll_interval_ms: 5000,
         }
     }
@@ -95,6 +100,10 @@ pub struct BrokerConfig {
 
     /// Broker's own IPv6 address.
     pub broker_ipv6: Ipv6Addr,
+
+    /// Optional capacity limit (synced to on-chain totalCapacity).
+    /// If not set, on-chain totalCapacity stays 0 (unlimited).
+    pub max_allocations: Option<u64>,
 }
 
 impl Default for BrokerConfig {
@@ -103,6 +112,7 @@ impl Default for BrokerConfig {
             upstream_prefix: "2a11:6c7:f04:276::/64".parse().unwrap(),
             allocation_size: 120,
             broker_ipv6: "2a11:6c7:f04:276::2".parse().unwrap(),
+            max_allocations: None,
         }
     }
 }
@@ -117,8 +127,9 @@ impl BrokerConfig {
         Ok(())
     }
 
-    /// Calculate the maximum number of allocations possible.
-    pub fn max_allocations(&self) -> u64 {
+    /// Calculate the theoretical maximum number of allocations from prefix math.
+    /// Used internally by IPAM for index ceiling — NOT for on-chain capacity.
+    pub fn theoretical_max_allocations(&self) -> u64 {
         let upstream_bits = 128 - self.upstream_prefix.prefix_len();
         let alloc_bits = 128 - self.allocation_size;
         if upstream_bits <= alloc_bits {
@@ -284,7 +295,7 @@ mod tests {
             broker_ipv6: "2001:db8::1".parse().unwrap(),
         };
         // /48 to /64 = 16 bits = 65535 allocations (minus 1 reserved)
-        assert_eq!(config.max_allocations(), 65535);
+        assert_eq!(config.theoretical_max_allocations(), 65535);
     }
 
     #[test]

@@ -70,8 +70,16 @@ contract BrokerRegistry is Ownable {
         require(operator != address(0), "Invalid operator address");
         require(requestsContract != address(0), "Invalid requests contract");
         require(encryptionPubkey.length == 65, "Pubkey must be 65 bytes (uncompressed secp256k1)");
-        require(operatorToBrokerId[operator] == 0, "Operator already registered");
         require(requestsContractToBrokerId[requestsContract] == 0, "Requests contract already registered");
+
+        // Handle re-registration: deactivate old entry
+        uint256 existingId = operatorToBrokerId[operator];
+        if (existingId != 0) {
+            Broker storage oldBroker = brokers[existingId - 1];
+            oldBroker.active = false;
+            delete requestsContractToBrokerId[oldBroker.requestsContract];
+            emit BrokerDeactivated(existingId, operator);
+        }
 
         brokers.push(Broker({
             operator: operator,

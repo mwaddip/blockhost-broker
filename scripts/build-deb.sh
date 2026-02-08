@@ -3,7 +3,7 @@
 
 set -e
 
-VERSION="0.1.0"
+VERSION="0.3.0"
 PKG_NAME="blockhost-broker-client_${VERSION}_all"
 
 echo "Building blockhost-broker-client v${VERSION}..."

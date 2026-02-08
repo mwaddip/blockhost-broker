@@ -18,6 +18,74 @@ pub mod broker_requests {
             }),
             functions: ::core::convert::From::from([
                 (
+                    ::std::borrow::ToOwned::to_owned("_activeCount"),
+                    ::std::vec![
+                        ::ethers::core::abi::ethabi::Function {
+                            name: ::std::borrow::ToOwned::to_owned("_activeCount"),
+                            inputs: ::std::vec![],
+                            outputs: ::std::vec![
+                                ::ethers::core::abi::ethabi::Param {
+                                    name: ::std::string::String::new(),
+                                    kind: ::ethers::core::abi::ethabi::ParamType::Uint(
+                                        256usize,
+                                    ),
+                                    internal_type: ::core::option::Option::Some(
+                                        ::std::borrow::ToOwned::to_owned("uint256"),
+                                    ),
+                                },
+                            ],
+                            constant: ::core::option::Option::None,
+                            state_mutability: ::ethers::core::abi::ethabi::StateMutability::View,
+                        },
+                    ],
+                ),
+                (
+                    ::std::borrow::ToOwned::to_owned("_pendingCount"),
+                    ::std::vec![
+                        ::ethers::core::abi::ethabi::Function {
+                            name: ::std::borrow::ToOwned::to_owned("_pendingCount"),
+                            inputs: ::std::vec![],
+                            outputs: ::std::vec![
+                                ::ethers::core::abi::ethabi::Param {
+                                    name: ::std::string::String::new(),
+                                    kind: ::ethers::core::abi::ethabi::ParamType::Uint(
+                                        256usize,
+                                    ),
+                                    internal_type: ::core::option::Option::Some(
+                                        ::std::borrow::ToOwned::to_owned("uint256"),
+                                    ),
+                                },
+                            ],
+                            constant: ::core::option::Option::None,
+                            state_mutability: ::ethers::core::abi::ethabi::StateMutability::View,
+                        },
+                    ],
+                ),
+                (
+                    ::std::borrow::ToOwned::to_owned("getAvailableCapacity"),
+                    ::std::vec![
+                        ::ethers::core::abi::ethabi::Function {
+                            name: ::std::borrow::ToOwned::to_owned(
+                                "getAvailableCapacity",
+                            ),
+                            inputs: ::std::vec![],
+                            outputs: ::std::vec![
+                                ::ethers::core::abi::ethabi::Param {
+                                    name: ::std::string::String::new(),
+                                    kind: ::ethers::core::abi::ethabi::ParamType::Uint(
+                                        256usize,
+                                    ),
+                                    internal_type: ::core::option::Option::Some(
+                                        ::std::borrow::ToOwned::to_owned("uint256"),
+                                    ),
+                                },
+                            ],
+                            constant: ::core::option::Option::None,
+                            state_mutability: ::ethers::core::abi::ethabi::StateMutability::View,
+                        },
+                    ],
+                ),
+                (
                     ::std::borrow::ToOwned::to_owned("getRequest"),
                     ::std::vec![
                         ::ethers::core::abi::ethabi::Function {
@@ -365,6 +433,28 @@ pub mod broker_requests {
                     ],
                 ),
                 (
+                    ::std::borrow::ToOwned::to_owned("setTotalCapacity"),
+                    ::std::vec![
+                        ::ethers::core::abi::ethabi::Function {
+                            name: ::std::borrow::ToOwned::to_owned("setTotalCapacity"),
+                            inputs: ::std::vec![
+                                ::ethers::core::abi::ethabi::Param {
+                                    name: ::std::borrow::ToOwned::to_owned("_totalCapacity"),
+                                    kind: ::ethers::core::abi::ethabi::ParamType::Uint(
+                                        256usize,
+                                    ),
+                                    internal_type: ::core::option::Option::Some(
+                                        ::std::borrow::ToOwned::to_owned("uint256"),
+                                    ),
+                                },
+                            ],
+                            outputs: ::std::vec![],
+                            constant: ::core::option::Option::None,
+                            state_mutability: ::ethers::core::abi::ethabi::StateMutability::NonPayable,
+                        },
+                    ],
+                ),
+                (
                     ::std::borrow::ToOwned::to_owned("submitRequest"),
                     ::std::vec![
                         ::ethers::core::abi::ethabi::Function {
@@ -427,6 +517,28 @@ pub mod broker_requests {
                             outputs: ::std::vec![],
                             constant: ::core::option::Option::None,
                             state_mutability: ::ethers::core::abi::ethabi::StateMutability::NonPayable,
+                        },
+                    ],
+                ),
+                (
+                    ::std::borrow::ToOwned::to_owned("totalCapacity"),
+                    ::std::vec![
+                        ::ethers::core::abi::ethabi::Function {
+                            name: ::std::borrow::ToOwned::to_owned("totalCapacity"),
+                            inputs: ::std::vec![],
+                            outputs: ::std::vec![
+                                ::ethers::core::abi::ethabi::Param {
+                                    name: ::std::string::String::new(),
+                                    kind: ::ethers::core::abi::ethabi::ParamType::Uint(
+                                        256usize,
+                                    ),
+                                    internal_type: ::core::option::Option::Some(
+                                        ::std::borrow::ToOwned::to_owned("uint256"),
+                                    ),
+                                },
+                            ],
+                            constant: ::core::option::Option::None,
+                            state_mutability: ::ethers::core::abi::ethabi::StateMutability::View,
                         },
                     ],
                 ),
@@ -642,6 +754,30 @@ pub mod broker_requests {
                 ),
             )
         }
+        ///Calls the contract's `_activeCount` (0xef1c32da) function
+        pub fn active_count(
+            &self,
+        ) -> ::ethers::contract::builders::ContractCall<M, ::ethers::core::types::U256> {
+            self.0
+                .method_hash([239, 28, 50, 218], ())
+                .expect("method not found (this should never happen)")
+        }
+        ///Calls the contract's `_pendingCount` (0xa72e2bbb) function
+        pub fn pending_count(
+            &self,
+        ) -> ::ethers::contract::builders::ContractCall<M, ::ethers::core::types::U256> {
+            self.0
+                .method_hash([167, 46, 43, 187], ())
+                .expect("method not found (this should never happen)")
+        }
+        ///Calls the contract's `getAvailableCapacity` (0x370dad80) function
+        pub fn get_available_capacity(
+            &self,
+        ) -> ::ethers::contract::builders::ContractCall<M, ::ethers::core::types::U256> {
+            self.0
+                .method_hash([55, 13, 173, 128], ())
+                .expect("method not found (this should never happen)")
+        }
         ///Calls the contract's `getRequest` (0xc58343ef) function
         pub fn get_request(
             &self,
@@ -753,6 +889,15 @@ pub mod broker_requests {
                 .method_hash([121, 25, 179, 197], new_expiration_time)
                 .expect("method not found (this should never happen)")
         }
+        ///Calls the contract's `setTotalCapacity` (0x3767ea7e) function
+        pub fn set_total_capacity(
+            &self,
+            total_capacity: ::ethers::core::types::U256,
+        ) -> ::ethers::contract::builders::ContractCall<M, ()> {
+            self.0
+                .method_hash([55, 103, 234, 126], total_capacity)
+                .expect("method not found (this should never happen)")
+        }
         ///Calls the contract's `submitRequest` (0x0f9dd2c8) function
         pub fn submit_request(
             &self,
@@ -771,6 +916,14 @@ pub mod broker_requests {
         ) -> ::ethers::contract::builders::ContractCall<M, ()> {
             self.0
                 .method_hash([210, 169, 113, 60], (request_id, encrypted_payload))
+                .expect("method not found (this should never happen)")
+        }
+        ///Calls the contract's `totalCapacity` (0x2f91f1f4) function
+        pub fn total_capacity(
+            &self,
+        ) -> ::ethers::contract::builders::ContractCall<M, ::ethers::core::types::U256> {
+            self.0
+                .method_hash([47, 145, 241, 244], ())
                 .expect("method not found (this should never happen)")
         }
         ///Calls the contract's `transferOwnership` (0xf2fde38b) function
@@ -1104,6 +1257,45 @@ pub mod broker_requests {
             Self::ResponseSubmittedFilter(value)
         }
     }
+    ///Container type for all input parameters for the `_activeCount` function with signature `_activeCount()` and selector `0xef1c32da`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthCall,
+        ::ethers::contract::EthDisplay,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    #[ethcall(name = "_activeCount", abi = "_activeCount()")]
+    pub struct ActiveCountCall;
+    ///Container type for all input parameters for the `_pendingCount` function with signature `_pendingCount()` and selector `0xa72e2bbb`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthCall,
+        ::ethers::contract::EthDisplay,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    #[ethcall(name = "_pendingCount", abi = "_pendingCount()")]
+    pub struct PendingCountCall;
+    ///Container type for all input parameters for the `getAvailableCapacity` function with signature `getAvailableCapacity()` and selector `0x370dad80`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthCall,
+        ::ethers::contract::EthDisplay,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    #[ethcall(name = "getAvailableCapacity", abi = "getAvailableCapacity()")]
+    pub struct GetAvailableCapacityCall;
     ///Container type for all input parameters for the `getRequest` function with signature `getRequest(uint256)` and selector `0xc58343ef`
     #[derive(
         Clone,
@@ -1264,6 +1456,21 @@ pub mod broker_requests {
     pub struct SetRequestExpirationTimeCall {
         pub new_expiration_time: ::ethers::core::types::U256,
     }
+    ///Container type for all input parameters for the `setTotalCapacity` function with signature `setTotalCapacity(uint256)` and selector `0x3767ea7e`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthCall,
+        ::ethers::contract::EthDisplay,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    #[ethcall(name = "setTotalCapacity", abi = "setTotalCapacity(uint256)")]
+    pub struct SetTotalCapacityCall {
+        pub total_capacity: ::ethers::core::types::U256,
+    }
     ///Container type for all input parameters for the `submitRequest` function with signature `submitRequest(address,bytes)` and selector `0x0f9dd2c8`
     #[derive(
         Clone,
@@ -1296,6 +1503,19 @@ pub mod broker_requests {
         pub request_id: ::ethers::core::types::U256,
         pub encrypted_payload: ::ethers::core::types::Bytes,
     }
+    ///Container type for all input parameters for the `totalCapacity` function with signature `totalCapacity()` and selector `0x2f91f1f4`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthCall,
+        ::ethers::contract::EthDisplay,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    #[ethcall(name = "totalCapacity", abi = "totalCapacity()")]
+    pub struct TotalCapacityCall;
     ///Container type for all input parameters for the `transferOwnership` function with signature `transferOwnership(address)` and selector `0xf2fde38b`
     #[derive(
         Clone,
@@ -1314,6 +1534,9 @@ pub mod broker_requests {
     ///Container type for all of the contract's call
     #[derive(Clone, ::ethers::contract::EthAbiType, Debug, PartialEq, Eq, Hash)]
     pub enum BrokerRequestsCalls {
+        ActiveCount(ActiveCountCall),
+        PendingCount(PendingCountCall),
+        GetAvailableCapacity(GetAvailableCapacityCall),
         GetRequest(GetRequestCall),
         GetRequestCount(GetRequestCountCall),
         MarkExpired(MarkExpiredCall),
@@ -1325,8 +1548,10 @@ pub mod broker_requests {
         RequesterToRequestIds(RequesterToRequestIdsCall),
         Requests(RequestsCall),
         SetRequestExpirationTime(SetRequestExpirationTimeCall),
+        SetTotalCapacity(SetTotalCapacityCall),
         SubmitRequest(SubmitRequestCall),
         SubmitResponse(SubmitResponseCall),
+        TotalCapacity(TotalCapacityCall),
         TransferOwnership(TransferOwnershipCall),
     }
     impl ::ethers::core::abi::AbiDecode for BrokerRequestsCalls {
@@ -1334,6 +1559,21 @@ pub mod broker_requests {
             data: impl AsRef<[u8]>,
         ) -> ::core::result::Result<Self, ::ethers::core::abi::AbiError> {
             let data = data.as_ref();
+            if let Ok(decoded) = <ActiveCountCall as ::ethers::core::abi::AbiDecode>::decode(
+                data,
+            ) {
+                return Ok(Self::ActiveCount(decoded));
+            }
+            if let Ok(decoded) = <PendingCountCall as ::ethers::core::abi::AbiDecode>::decode(
+                data,
+            ) {
+                return Ok(Self::PendingCount(decoded));
+            }
+            if let Ok(decoded) = <GetAvailableCapacityCall as ::ethers::core::abi::AbiDecode>::decode(
+                data,
+            ) {
+                return Ok(Self::GetAvailableCapacity(decoded));
+            }
             if let Ok(decoded) = <GetRequestCall as ::ethers::core::abi::AbiDecode>::decode(
                 data,
             ) {
@@ -1389,6 +1629,11 @@ pub mod broker_requests {
             ) {
                 return Ok(Self::SetRequestExpirationTime(decoded));
             }
+            if let Ok(decoded) = <SetTotalCapacityCall as ::ethers::core::abi::AbiDecode>::decode(
+                data,
+            ) {
+                return Ok(Self::SetTotalCapacity(decoded));
+            }
             if let Ok(decoded) = <SubmitRequestCall as ::ethers::core::abi::AbiDecode>::decode(
                 data,
             ) {
@@ -1398,6 +1643,11 @@ pub mod broker_requests {
                 data,
             ) {
                 return Ok(Self::SubmitResponse(decoded));
+            }
+            if let Ok(decoded) = <TotalCapacityCall as ::ethers::core::abi::AbiDecode>::decode(
+                data,
+            ) {
+                return Ok(Self::TotalCapacity(decoded));
             }
             if let Ok(decoded) = <TransferOwnershipCall as ::ethers::core::abi::AbiDecode>::decode(
                 data,
@@ -1410,6 +1660,15 @@ pub mod broker_requests {
     impl ::ethers::core::abi::AbiEncode for BrokerRequestsCalls {
         fn encode(self) -> Vec<u8> {
             match self {
+                Self::ActiveCount(element) => {
+                    ::ethers::core::abi::AbiEncode::encode(element)
+                }
+                Self::PendingCount(element) => {
+                    ::ethers::core::abi::AbiEncode::encode(element)
+                }
+                Self::GetAvailableCapacity(element) => {
+                    ::ethers::core::abi::AbiEncode::encode(element)
+                }
                 Self::GetRequest(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
                 }
@@ -1441,10 +1700,16 @@ pub mod broker_requests {
                 Self::SetRequestExpirationTime(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
                 }
+                Self::SetTotalCapacity(element) => {
+                    ::ethers::core::abi::AbiEncode::encode(element)
+                }
                 Self::SubmitRequest(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
                 }
                 Self::SubmitResponse(element) => {
+                    ::ethers::core::abi::AbiEncode::encode(element)
+                }
+                Self::TotalCapacity(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
                 }
                 Self::TransferOwnership(element) => {
@@ -1456,6 +1721,11 @@ pub mod broker_requests {
     impl ::core::fmt::Display for BrokerRequestsCalls {
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             match self {
+                Self::ActiveCount(element) => ::core::fmt::Display::fmt(element, f),
+                Self::PendingCount(element) => ::core::fmt::Display::fmt(element, f),
+                Self::GetAvailableCapacity(element) => {
+                    ::core::fmt::Display::fmt(element, f)
+                }
                 Self::GetRequest(element) => ::core::fmt::Display::fmt(element, f),
                 Self::GetRequestCount(element) => ::core::fmt::Display::fmt(element, f),
                 Self::MarkExpired(element) => ::core::fmt::Display::fmt(element, f),
@@ -1475,10 +1745,27 @@ pub mod broker_requests {
                 Self::SetRequestExpirationTime(element) => {
                     ::core::fmt::Display::fmt(element, f)
                 }
+                Self::SetTotalCapacity(element) => ::core::fmt::Display::fmt(element, f),
                 Self::SubmitRequest(element) => ::core::fmt::Display::fmt(element, f),
                 Self::SubmitResponse(element) => ::core::fmt::Display::fmt(element, f),
+                Self::TotalCapacity(element) => ::core::fmt::Display::fmt(element, f),
                 Self::TransferOwnership(element) => ::core::fmt::Display::fmt(element, f),
             }
+        }
+    }
+    impl ::core::convert::From<ActiveCountCall> for BrokerRequestsCalls {
+        fn from(value: ActiveCountCall) -> Self {
+            Self::ActiveCount(value)
+        }
+    }
+    impl ::core::convert::From<PendingCountCall> for BrokerRequestsCalls {
+        fn from(value: PendingCountCall) -> Self {
+            Self::PendingCount(value)
+        }
+    }
+    impl ::core::convert::From<GetAvailableCapacityCall> for BrokerRequestsCalls {
+        fn from(value: GetAvailableCapacityCall) -> Self {
+            Self::GetAvailableCapacity(value)
         }
     }
     impl ::core::convert::From<GetRequestCall> for BrokerRequestsCalls {
@@ -1536,6 +1823,11 @@ pub mod broker_requests {
             Self::SetRequestExpirationTime(value)
         }
     }
+    impl ::core::convert::From<SetTotalCapacityCall> for BrokerRequestsCalls {
+        fn from(value: SetTotalCapacityCall) -> Self {
+            Self::SetTotalCapacity(value)
+        }
+    }
     impl ::core::convert::From<SubmitRequestCall> for BrokerRequestsCalls {
         fn from(value: SubmitRequestCall) -> Self {
             Self::SubmitRequest(value)
@@ -1546,11 +1838,52 @@ pub mod broker_requests {
             Self::SubmitResponse(value)
         }
     }
+    impl ::core::convert::From<TotalCapacityCall> for BrokerRequestsCalls {
+        fn from(value: TotalCapacityCall) -> Self {
+            Self::TotalCapacity(value)
+        }
+    }
     impl ::core::convert::From<TransferOwnershipCall> for BrokerRequestsCalls {
         fn from(value: TransferOwnershipCall) -> Self {
             Self::TransferOwnership(value)
         }
     }
+    ///Container type for all return fields from the `_activeCount` function with signature `_activeCount()` and selector `0xef1c32da`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthAbiType,
+        ::ethers::contract::EthAbiCodec,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    pub struct ActiveCountReturn(pub ::ethers::core::types::U256);
+    ///Container type for all return fields from the `_pendingCount` function with signature `_pendingCount()` and selector `0xa72e2bbb`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthAbiType,
+        ::ethers::contract::EthAbiCodec,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    pub struct PendingCountReturn(pub ::ethers::core::types::U256);
+    ///Container type for all return fields from the `getAvailableCapacity` function with signature `getAvailableCapacity()` and selector `0x370dad80`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthAbiType,
+        ::ethers::contract::EthAbiCodec,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    pub struct GetAvailableCapacityReturn(pub ::ethers::core::types::U256);
     ///Container type for all return fields from the `getRequest` function with signature `getRequest(uint256)` and selector `0xc58343ef`
     #[derive(
         Clone,
@@ -1662,6 +1995,18 @@ pub mod broker_requests {
     pub struct SubmitRequestReturn {
         pub request_id: ::ethers::core::types::U256,
     }
+    ///Container type for all return fields from the `totalCapacity` function with signature `totalCapacity()` and selector `0x2f91f1f4`
+    #[derive(
+        Clone,
+        ::ethers::contract::EthAbiType,
+        ::ethers::contract::EthAbiCodec,
+        Default,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash
+    )]
+    pub struct TotalCapacityReturn(pub ::ethers::core::types::U256);
     ///`Request(uint256,address,address,bytes,uint8,bytes,uint256,uint256)`
     #[derive(
         Clone,

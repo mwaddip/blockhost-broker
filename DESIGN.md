@@ -43,15 +43,17 @@ blockhost-broker is a lightweight IPv6 tunnel broker that sub-allocates IPv6 pre
 
 ### 1. On-Chain Monitor (Primary Mode)
 
-The broker primarily operates in on-chain mode, monitoring the blockchain for allocation requests.
+The broker primarily operates in on-chain mode, monitoring the blockchain for allocation requests. It supports multi-contract monitoring: the primary (V2) contract for new requests, plus any number of legacy contracts for existing allocations.
 
 **Flow:**
-1. Lazy polls `BrokerRequests.getRequestCount()` every 5 seconds
-2. Fetches new requests via `getRequest(id)`
-3. Verifies NFT contract ownership
-4. Allocates prefix, adds WireGuard peer
-5. Submits response on-chain (request ID prefix + ECIES encrypted payload)
-6. Starts 2-minute tunnel verification — releases allocation if no WireGuard handshake
+1. On startup, syncs capacity with primary contract (`totalCapacity` ↔ config `max_allocations`)
+2. Lazy polls `BrokerRequests.getRequestCount()` every 5 seconds (primary + legacy contracts)
+3. Fetches new requests via `getRequest(id)`, using per-contract `last_processed_id`
+4. Verifies NFT contract ownership
+5. Allocates prefix, adds WireGuard peer
+6. Submits response on-chain (request ID prefix + ECIES encrypted payload)
+7. If on-chain submission fails, rolls back IPAM + WireGuard allocation
+8. Starts 2-minute tunnel verification — releases allocation if no WireGuard handshake
 
 ### 2. Internal API Server (Secondary)
 
@@ -195,7 +197,8 @@ CREATE TABLE state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
--- Used to store last_processed_id for request polling
+-- Per-contract polling state: last_processed_id:{contract_address}
+-- Legacy key "last_processed_id" is migrated on startup to per-contract format
 ```
 
 ---
@@ -672,10 +675,14 @@ When enabled, the broker uses blockchain-based verification instead of bearer to
 **BrokerRegistry** (global):
 - Stores list of available brokers
 - Broker pubkey, region, capacity, requests contract address
+- Supports re-registration: same operator can register a new requests contract (old entry deactivated)
 
-**BrokerRequests** (per-broker):
+**BrokerRequests** (per-broker, V2):
 - Handles allocation requests for a specific broker
 - Verifies NFT contract ownership before accepting requests
+- **Overwrite semantics**: `submitRequest()` with a duplicate NFT contract expires the old request and creates a new one (no revert)
+- **Capacity tracking**: `totalCapacity`, `_activeCount`, `_pendingCount` counters; `getAvailableCapacity()` view
+- **Supersession guard**: `submitResponse()` reverts if the request was overwritten between processing and tx confirmation
 
 ### Verification Logic
 
@@ -686,11 +693,13 @@ When enabled, the broker uses blockchain-based verification instead of bearer to
 ### Re-Request Handling
 
 If a request comes from the same NFT contract as an existing allocation:
+- The V2 contract overwrites the old request on-chain (old → Expired, counters updated)
 - The broker updates the WireGuard public key to the new one
 - The same prefix allocation is returned
 - The old WireGuard peer is removed, new one added
+- Any pending tunnel verification for the old request is removed (prevents incorrect release)
 
-This enables key rotation without losing the allocated prefix.
+This enables key rotation without losing the allocated prefix. With V2 overwrite semantics, the client no longer needs to wait for the old allocation to be released on-chain before re-requesting.
 
 ### Response Payload Format
 
@@ -716,8 +725,10 @@ When the client finds an existing approved allocation on-chain:
 1. Extracts the request ID prefix from the response payload
 2. If the embedded ID doesn't match the current request ID → stale response
 3. If IDs match but decryption fails → also stale
-4. In both cases, the client resets and submits a new request
-5. The broker's tunnel verification will auto-release the stale allocation
+4. In both cases, the client immediately submits a new request (V2 overwrite handles the duplicate on-chain)
+5. The broker's tunnel verification will auto-release the stale allocation after 2 minutes
+
+With V2 contracts, there is no need for the client to poll and wait for the old allocation to be released before re-requesting. The contract handles the overwrite atomically.
 
 ### Encryption
 
@@ -734,10 +745,12 @@ When the client finds an existing approved allocation on-chain:
 enabled = true
 rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
 chain_id = 11155111
-private_key_file = "/etc/blockhost-broker/deployer.key"
+private_key_file = "/etc/blockhost-broker/operator.key"
 ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
-requests_contract = "0x..."
+registry_contract = "0x..."    # BrokerRegistry address
+requests_contract = "0x..."    # Primary BrokerRequests address (V2)
 poll_interval_ms = 5000
+legacy_requests_contracts = ["0x..."]  # Old BrokerRequests addresses to keep monitoring
 ```
 
 ### Client/Server Separation

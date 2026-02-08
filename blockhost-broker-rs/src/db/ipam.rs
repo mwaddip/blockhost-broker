@@ -423,7 +423,7 @@ impl Ipam {
 
     // State management
 
-    /// Get the last processed request ID.
+    /// Get the last processed request ID (legacy — uses default key).
     pub async fn get_last_processed_id(&self) -> Result<u64, IpamError> {
         let value: String = sqlx::query_scalar("SELECT value FROM state WHERE key = 'last_processed_id'")
             .fetch_one(&self.pool)
@@ -432,7 +432,7 @@ impl Ipam {
         Ok(value.parse().unwrap_or(0))
     }
 
-    /// Set the last processed request ID.
+    /// Set the last processed request ID (legacy — uses default key).
     pub async fn set_last_processed_id(&self, id: u64) -> Result<(), IpamError> {
         sqlx::query(
             "UPDATE state SET value = ?, updated_at = datetime('now') WHERE key = 'last_processed_id'",
@@ -442,6 +442,72 @@ impl Ipam {
         .await?;
 
         debug!(last_processed_id = id, "Updated last processed ID");
+        Ok(())
+    }
+
+    /// Get the last processed request ID for a specific contract address.
+    pub async fn get_last_processed_id_for_contract(&self, contract: &str) -> Result<u64, IpamError> {
+        let key = format!("last_processed_id:{}", contract.to_lowercase());
+        let value: Option<String> = sqlx::query_scalar("SELECT value FROM state WHERE key = ?")
+            .bind(&key)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(value.and_then(|v| v.parse().ok()).unwrap_or(0))
+    }
+
+    /// Set the last processed request ID for a specific contract address.
+    pub async fn set_last_processed_id_for_contract(&self, contract: &str, id: u64) -> Result<(), IpamError> {
+        let key = format!("last_processed_id:{}", contract.to_lowercase());
+        sqlx::query(
+            "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(&key)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        debug!(contract = contract, last_processed_id = id, "Updated last processed ID for contract");
+        Ok(())
+    }
+
+    /// Migrate legacy last_processed_id to per-contract key.
+    /// Call this during startup if a legacy contract is configured.
+    pub async fn migrate_last_processed_id(&self, legacy_contract: &str) -> Result<(), IpamError> {
+        let key = format!("last_processed_id:{}", legacy_contract.to_lowercase());
+
+        // Check if per-contract key already exists
+        let existing: Option<String> = sqlx::query_scalar("SELECT value FROM state WHERE key = ?")
+            .bind(&key)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if existing.is_some() {
+            return Ok(()); // Already migrated
+        }
+
+        // Read legacy key
+        let legacy_value: Option<String> = sqlx::query_scalar("SELECT value FROM state WHERE key = 'last_processed_id'")
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some(value) = legacy_value {
+            let id: u64 = value.parse().unwrap_or(0);
+            if id > 0 {
+                info!(
+                    legacy_contract = legacy_contract,
+                    last_processed_id = id,
+                    "Migrating last_processed_id to per-contract key"
+                );
+                self.set_last_processed_id_for_contract(legacy_contract, id).await?;
+
+                // Reset legacy key to 0 so it doesn't confuse future reads
+                sqlx::query("UPDATE state SET value = '0', updated_at = datetime('now') WHERE key = 'last_processed_id'")
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+
         Ok(())
     }
 

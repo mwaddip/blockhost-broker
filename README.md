@@ -42,10 +42,13 @@ This broker allocates IPv6 prefixes to Blockhost servers (Proxmox) via WireGuard
 
 ## Components
 
-### Smart Contracts
+### Smart Contracts (V2)
 
-- **BrokerRegistry** - Global registry of available brokers (owner-managed)
+- **BrokerRegistry** - Global registry of available brokers (owner-managed, supports re-registration)
 - **BrokerRequests** - Per-broker contract for allocation requests/responses
+  - Overwrite semantics: re-submitting from the same NFT contract overwrites the old request (no revert)
+  - On-chain capacity tracking: `totalCapacity`, `_activeCount`, `_pendingCount`, `getAvailableCapacity()`
+  - Supersession guard: prevents approving overwritten requests
 
 ### Broker Daemon
 
@@ -146,14 +149,16 @@ ecies_private_key_file = "/etc/blockhost-broker/ecies.key"
 registry_contract = "0x..."   # BrokerRegistry address
 requests_contract = "0x..."   # This broker's BrokerRequests address
 poll_interval_ms = 5000
+legacy_requests_contracts = ["0x..."]  # Old BrokerRequests addresses to keep monitoring
 ```
 
 ## On-Chain Authentication Flow
 
-1. **Client** queries `BrokerRegistry` for available brokers
+1. **Client** queries `BrokerRegistry` for available brokers, selecting one with available capacity
 2. **Client** generates WireGuard keypair and ECIES keypair
 3. **Client** encrypts request payload with broker's public key
 4. **Client** calls `BrokerRequests.submitRequest(nftContract, encryptedPayload)`
+   - If the NFT contract already has a request, the contract overwrites it (old request marked Expired)
 5. **Broker** detects request via lazy polling
 6. **Broker** verifies:
    - NFT contract exists and is ERC721
@@ -167,14 +172,20 @@ poll_interval_ms = 5000
 
 Invalid requests are silently rejected (no on-chain response, request expires).
 
-**Re-requests:** If a client submits a new request from the same NFT contract, the broker updates the WireGuard public key and returns the same allocation. This allows key rotation without losing the allocated prefix.
+**Re-requests:** If a client submits a new request from the same NFT contract, the contract overwrites the old request on-chain. The broker updates the WireGuard public key and returns the same allocation. This allows key rotation without losing the allocated prefix.
 
-**Stale response detection:** After a server re-install (new ECIES key), the client detects the stale on-chain response via the request ID prefix mismatch and submits a new request. The broker's tunnel verification auto-releases the old allocation after 2 minutes if no WireGuard handshake occurs.
+**Stale response detection:** After a server re-install (new ECIES key), the client detects the stale on-chain response via the request ID prefix mismatch and immediately submits a new request (the V2 contract handles the overwrite). The broker's tunnel verification auto-releases the old allocation after 2 minutes if no WireGuard handshake occurs.
+
+**Capacity-aware selection:** The client calls `getAvailableCapacity()` on each broker's contract and skips brokers with no capacity, falling back to the next available broker in the registry.
 
 ## Contract Addresses (Sepolia Testnet)
 
-- **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
-- **BrokerRequests** (eu-west broker): `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
+**V2 (active):**
+- **BrokerRegistry**: `0x4e020bf35a1b2939E359892D22d96B4A2DAEb93e`
+- **BrokerRequests** (eu-west broker): `0xDE6f2cBB6de279e9f95Cd07B18411d26FEa51546`
+
+**V1 (legacy, still monitored):**
+- **BrokerRequests**: `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
 
 The registry address is published at:
 https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
@@ -186,8 +197,16 @@ Using Foundry:
 ```bash
 cd contracts-foundry
 forge build
-forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
+forge test
+
+# Deploy V2 contracts (registry + requests + register broker)
+forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
 ```
+
+The `DeployV2.s.sol` script performs a 3-phase deployment:
+1. Deployer key deploys `BrokerRegistry`
+2. Operator key deploys `BrokerRequests`
+3. Deployer key calls `registerBroker()` to register the operator
 
 ## Broker Client
 

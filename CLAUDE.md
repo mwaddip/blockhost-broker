@@ -15,16 +15,23 @@ See `SPECIAL.md` for full stat definitions and the priority allocation model.
 ## Environment Setup
 
 Environment variables should be in `~/projects/sharedenv/blockhost.env` (not committed):
-- `DEPLOYER_PRIVATE_KEY` - Wallet private key for deployments
+- `DEPLOYER_PRIVATE_KEY` - Wallet private key for deployments (registry owner)
+- `OPERATOR_PRIVATE_KEY` - Operator wallet private key (BrokerRequests owner)
 - `BLOCKHOST_NFT` - AccessCredentialNFT contract address
 - `BLOCKHOST_CONTRACT` - Main Blockhost contract address
 - `SEPOLIA_RPC` - Sepolia RPC endpoint
 
 ## Deployed Contracts (Sepolia Testnet)
 
-**Currently Active:**
+**Currently Active (V2):**
+- **BrokerRegistry**: `0x4e020bf35a1b2939E359892D22d96B4A2DAEb93e`
+- **BrokerRequests**: `0xDE6f2cBB6de279e9f95Cd07B18411d26FEa51546`
+
+**Legacy (V1 — still monitored by broker):**
 - **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
 - **BrokerRequests**: `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
+
+V2 adds overwrite-on-duplicate, capacity tracking, and re-registration support. Deployed via `contracts-foundry/script/DeployV2.s.sol`.
 
 Registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
 
@@ -45,6 +52,11 @@ cargo build --release
 # Deploy to server
 scp target/release/blockhost-broker linuxuser@95.179.128.177:/tmp/
 ssh linuxuser@95.179.128.177 'sudo mv /tmp/blockhost-broker /usr/bin/ && sudo systemctl restart blockhost-broker'
+
+# Deploy V2 contracts (Foundry)
+cd contracts-foundry
+forge build && forge test
+forge script script/DeployV2.s.sol --rpc-url $SEPOLIA_RPC --broadcast
 
 # Run client (on Proxmox server)
 broker-client request --nft-contract 0x... --wallet-key /path/to/key
@@ -73,12 +85,18 @@ Components that must stay in sync:
 - `scripts/broker-client.py` - Client ABI definitions must match deployed contracts
 - `blockhost-broker-rs/src/eth/contracts.rs` - Rust broker ABI must match contracts (uses JSON ABI file)
 - `blockhost-broker-rs/contracts/abi/*.json` - JSON ABI files for contract bindings
-- `contracts/` - Solidity contract source
+- `contracts-foundry/src/` - Solidity contract source (canonical)
+- `registry.json` - Must point to the active BrokerRegistry address
 
 Common breaking changes to watch for:
 - Contract function signature changes
 - Struct return types (must use tuple format in ABI)
 - New/removed status codes
+
+V2 contract additions (must be present in both Rust ABI JSON and Python client ABI):
+- `getAvailableCapacity()`, `totalCapacity()`, `_activeCount()`, `_pendingCount()`, `setTotalCapacity(uint256)`
+
+The broker config supports `legacy_requests_contracts` — a list of old BrokerRequests addresses that the broker continues to monitor (read-only polling, no new approvals). This keeps existing allocations visible during migration.
 
 ## Project Structure
 

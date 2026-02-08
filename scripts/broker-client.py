@@ -19,7 +19,7 @@ Requirements:
 
 from __future__ import annotations
 
-CLIENT_VERSION = "0.2.0"  # request-id prefix + stale detection
+CLIENT_VERSION = "0.3.0"  # V2 contracts: overwrite, capacity-aware broker selection
 
 import argparse
 import ipaddress
@@ -187,6 +187,13 @@ BROKER_REQUESTS_ABI = [
     {
         "inputs": [{"internalType": "address", "name": "", "type": "address"}],
         "name": "nftContractToRequestId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "getAvailableCapacity",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "stateMutability": "view",
         "type": "function",
@@ -420,6 +427,17 @@ class BrokerClient:
             capacity=broker[5],
             current_load=broker[6],
         )
+
+    def get_available_capacity(self, requests_contract: str) -> int:
+        """Get available capacity for a broker's requests contract.
+
+        Returns type(uint256).max if unlimited (0 capacity configured).
+        """
+        contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(requests_contract),
+            abi=BROKER_REQUESTS_ABI,
+        )
+        return contract.functions.getAvailableCapacity().call()
 
     def submit_request(
         self,
@@ -822,8 +840,26 @@ def cmd_request(args: argparse.Namespace) -> int:
                 print(f"No brokers found in region {args.region}", file=sys.stderr)
                 return 1
 
-        # Select broker with lowest load
-        broker = min(brokers, key=lambda b: b.current_load)
+        # Filter by on-chain capacity
+        available_brokers = []
+        for b in brokers:
+            try:
+                capacity = client.get_available_capacity(b.requests_contract)
+                if capacity > 0:
+                    available_brokers.append(b)
+                else:
+                    print(f"  Broker #{b.id} ({b.region}): no capacity", file=sys.stderr)
+            except Exception as e:
+                # If capacity check fails (legacy contract), include the broker anyway
+                print(f"  Broker #{b.id}: capacity check failed ({e}), including", file=sys.stderr)
+                available_brokers.append(b)
+
+        if not available_brokers:
+            print("No brokers with available capacity", file=sys.stderr)
+            return 1
+
+        # Select broker with lowest load from those with capacity
+        broker = min(available_brokers, key=lambda b: b.current_load)
         print(f"Selected broker #{broker.id} in {broker.region} (load: {broker.current_load})")
 
     # Check for existing request
@@ -907,30 +943,12 @@ def cmd_request(args: argparse.Namespace) -> int:
                     stale = True
 
             if stale:
-                # Stale or undecryptable response — the broker's post-approval
-                # verification will release the on-chain mapping (up to 2 min).
-                # Poll until the mapping is cleared before submitting a new request.
+                # Stale or undecryptable response — V2 contracts support overwrite,
+                # so we can submit a new request immediately without waiting.
                 print(
-                    "Stale allocation detected — waiting for broker to release on-chain...",
+                    "Stale allocation detected — submitting new request (overwrite)",
                     file=sys.stderr,
                 )
-                release_deadline = time.time() + 180  # 3 min (2 min broker timeout + margin)
-                while time.time() < release_deadline:
-                    check_id = client.get_request_id_for_nft(
-                        broker.requests_contract, args.nft_contract
-                    )
-                    if check_id == 0:
-                        print("On-chain allocation released by broker")
-                        break
-                    elapsed = int(release_deadline - time.time())
-                    print(f"  Still allocated on-chain... (timeout in {elapsed}s)")
-                    time.sleep(max(args.poll_interval, MIN_POLL_INTERVAL))
-                else:
-                    print(
-                        "Broker did not release the stale allocation within timeout",
-                        file=sys.stderr,
-                    )
-                    return 1
                 existing_request_id = 0
         elif status == REQUEST_STATUS_PENDING:
             print("Request pending - waiting for response...")
@@ -1103,10 +1121,19 @@ def cmd_list_brokers(args: argparse.Namespace) -> int:
 
     print(f"Active brokers ({len(brokers)}):")
     for broker in brokers:
-        available = broker.capacity - broker.current_load if broker.capacity > 0 else "unlimited"
+        # Query on-chain capacity if available
+        try:
+            on_chain_capacity = client.get_available_capacity(broker.requests_contract)
+            if on_chain_capacity == 2**256 - 1:
+                capacity_str = "unlimited"
+            else:
+                capacity_str = str(on_chain_capacity)
+        except Exception:
+            capacity_str = "unknown"
+
         print(f"  #{broker.id}: {broker.region}")
         print(f"    Requests contract: {broker.requests_contract}")
-        print(f"    Load: {broker.current_load}/{broker.capacity or 'unlimited'} (available: {available})")
+        print(f"    Available capacity: {capacity_str}")
         print(f"    Pubkey: {broker.encryption_pubkey.hex()[:32]}...")
         print()
 
