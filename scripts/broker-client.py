@@ -886,7 +886,11 @@ def cmd_request(args: argparse.Namespace) -> int:
             else:
                 # IDs match (or legacy response) — try decryption
                 try:
-                    response_data = ecies_client.decrypt_json(encrypted_part)
+                    try:
+                        response_data = ecies_client.decrypt_json(encrypted_part)
+                    except Exception:
+                        # Fallback: raw payload (V1 server without request ID prefix)
+                        response_data = ecies_client.decrypt_json(response_payload)
                     allocation = _validate_allocation_response(response_data)
                     # Get broker wallet from the response transaction
                     recovered_broker_wallet = client.get_response_sender(
@@ -1022,9 +1026,13 @@ def cmd_request(args: argparse.Namespace) -> int:
     _, encrypted_part = _extract_request_id_prefix(response_payload)
     try:
         response_data = ecies_client.decrypt_json(encrypted_part)
-    except Exception as e:
-        print(f"Failed to decrypt response: {e}", file=sys.stderr)
-        return 1
+    except Exception:
+        # Fallback: try raw payload (V1 server without request ID prefix)
+        try:
+            response_data = ecies_client.decrypt_json(response_payload)
+        except Exception as e:
+            print(f"Failed to decrypt response: {e}", file=sys.stderr)
+            return 1
 
     allocation = _validate_allocation_response(response_data)
 
