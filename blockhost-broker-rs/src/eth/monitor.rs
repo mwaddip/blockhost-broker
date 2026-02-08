@@ -5,6 +5,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use chrono::{DateTime, TimeZone, Utc};
 use ethers::prelude::*;
 use thiserror::Error;
@@ -55,6 +57,17 @@ pub struct PendingRequest {
 
 type SignerMiddleware = ethers::middleware::SignerMiddleware<Provider<Http>, LocalWallet>;
 
+/// How long to wait for a WireGuard handshake after approval before releasing.
+const TUNNEL_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// An approved allocation awaiting WireGuard tunnel establishment.
+struct PendingVerification {
+    nft_contract: Address,
+    pubkey: String,
+    prefix: String,
+    approved_at: Instant,
+}
+
 /// Monitors BrokerRequests contract for new allocation requests.
 pub struct OnchainMonitor {
     onchain_config: OnchainConfig,
@@ -69,6 +82,7 @@ pub struct OnchainMonitor {
     contract: BrokerRequestsContract<SignerMiddleware>,
     shutdown_rx: watch::Receiver<bool>,
     shutdown_tx: watch::Sender<bool>,
+    pending_verifications: Vec<PendingVerification>,
 }
 
 impl OnchainMonitor {
@@ -132,6 +146,7 @@ impl OnchainMonitor {
             contract,
             shutdown_rx,
             shutdown_tx,
+            pending_verifications: Vec::new(),
         })
     }
 
@@ -151,6 +166,7 @@ impl OnchainMonitor {
                     if let Err(e) = self.poll_requests().await {
                         error!("Error polling requests: {}", e);
                     }
+                    self.check_pending_verifications().await;
                 }
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
@@ -377,6 +393,15 @@ impl OnchainMonitor {
         // Submit approval on-chain
         self.submit_approval(request.id, encrypted_response).await?;
 
+        // Track for tunnel verification — if no WG handshake within timeout,
+        // release the allocation so the client can re-request with a new key.
+        self.pending_verifications.push(PendingVerification {
+            nft_contract: request.nft_contract,
+            pubkey: payload.wg_pubkey.clone(),
+            prefix: allocation.prefix.to_string(),
+            approved_at: Instant::now(),
+        });
+
         info!(
             request_id = request.id,
             prefix = %allocation.prefix,
@@ -394,10 +419,17 @@ impl OnchainMonitor {
     }
 
     /// Submit an approval response on-chain.
+    ///
+    /// Prepends the request ID as an 8-byte big-endian prefix before the encrypted
+    /// payload so the client can identify stale responses without attempting decryption.
     async fn submit_approval(&self, request_id: u64, encrypted_payload: Vec<u8>) -> Result<(), MonitorError> {
+        let mut prefixed_payload = Vec::with_capacity(8 + encrypted_payload.len());
+        prefixed_payload.extend_from_slice(&request_id.to_be_bytes());
+        prefixed_payload.extend(encrypted_payload);
+
         let tx = self.contract.submit_response(
             U256::from(request_id),
-            Bytes::from(encrypted_payload),
+            Bytes::from(prefixed_payload),
         );
 
         let pending_tx = tx.send().await.map_err(|e| MonitorError::Contract(e.to_string()))?;
@@ -433,6 +465,70 @@ impl OnchainMonitor {
             None => {
                 error!(request_id = request_id, "No receipt received");
                 Err(MonitorError::Contract("No receipt".to_string()))
+            }
+        }
+    }
+
+    /// Check pending verifications — release allocations where no WG handshake
+    /// has occurred within the verification timeout.
+    async fn check_pending_verifications(&mut self) {
+        if self.pending_verifications.is_empty() {
+            return;
+        }
+
+        let mut to_release = Vec::new();
+        let mut to_keep = Vec::new();
+
+        for pv in self.pending_verifications.drain(..) {
+            if pv.approved_at.elapsed() < TUNNEL_VERIFICATION_TIMEOUT {
+                to_keep.push(pv);
+                continue;
+            }
+
+            // Timeout reached — check if a handshake ever happened
+            match self.wg.get_peer_status(&pv.pubkey) {
+                Ok(Some(status)) if status.latest_handshake.is_some() => {
+                    info!(
+                        pubkey = %pv.pubkey,
+                        prefix = %pv.prefix,
+                        "Tunnel verification passed — handshake detected"
+                    );
+                    // Verified, drop from list
+                }
+                Ok(_) => {
+                    // No handshake (peer not found or never connected)
+                    warn!(
+                        pubkey = %pv.pubkey,
+                        prefix = %pv.prefix,
+                        nft_contract = %pv.nft_contract,
+                        "No WG handshake within verification timeout — releasing allocation"
+                    );
+                    to_release.push(pv);
+                }
+                Err(e) => {
+                    warn!(
+                        pubkey = %pv.pubkey,
+                        error = %e,
+                        "Failed to check peer status — keeping verification pending"
+                    );
+                    to_keep.push(pv);
+                }
+            }
+        }
+
+        self.pending_verifications = to_keep;
+
+        for pv in to_release {
+            if let Err(e) = self
+                .release_allocation(pv.nft_contract, &pv.prefix, &pv.pubkey)
+                .await
+            {
+                error!(
+                    nft_contract = %pv.nft_contract,
+                    prefix = %pv.prefix,
+                    error = %e,
+                    "Failed to release unverified allocation"
+                );
             }
         }
     }

@@ -160,12 +160,16 @@ poll_interval_ms = 5000
    - `Ownable.owner() == msg.sender`
 7. **Broker** allocates prefix, adds WireGuard peer
 8. **Broker** encrypts response with client's public key
-9. **Broker** calls `BrokerRequests.submitResponse(requestId, encryptedPayload)`
-10. **Client** decrypts response, configures WireGuard
+9. **Broker** prepends 8-byte request ID prefix to encrypted payload
+10. **Broker** calls `BrokerRequests.submitResponse(requestId, prefixedPayload)`
+11. **Broker** starts 2-minute tunnel verification timer
+12. **Client** strips request ID prefix, decrypts response, configures WireGuard
 
 Invalid requests are silently rejected (no on-chain response, request expires).
 
 **Re-requests:** If a client submits a new request from the same NFT contract, the broker updates the WireGuard public key and returns the same allocation. This allows key rotation without losing the allocated prefix.
+
+**Stale response detection:** After a server re-install (new ECIES key), the client detects the stale on-chain response via the request ID prefix mismatch and submits a new request. The broker's tunnel verification auto-releases the old allocation after 2 minutes if no WireGuard handshake occurs.
 
 ## Contract Addresses (Sepolia Testnet)
 

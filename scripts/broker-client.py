@@ -264,6 +264,22 @@ def _validate_allocation_response(data: dict) -> "AllocationResponse":
     )
 
 
+REQUEST_ID_PREFIX_LEN = 8
+
+
+def _extract_request_id_prefix(payload: bytes) -> tuple[int, bytes]:
+    """Extract the 8-byte big-endian request ID prefix from a response payload.
+
+    Returns (request_id, remaining_payload).  If the payload is too short
+    to contain a prefix, returns (0, original_payload).
+    """
+    if len(payload) <= REQUEST_ID_PREFIX_LEN:
+        return (0, payload)
+    prefix_bytes = payload[:REQUEST_ID_PREFIX_LEN]
+    request_id = int.from_bytes(prefix_bytes, byteorder="big")
+    return (request_id, payload[REQUEST_ID_PREFIX_LEN:])
+
+
 @dataclass
 class AllocationResponse:
     """Decrypted allocation response from broker."""
@@ -819,64 +835,85 @@ def cmd_request(args: argparse.Namespace) -> int:
         )
         if status == REQUEST_STATUS_APPROVED:
             print("Request already approved - recovering allocation...")
-            # Decrypt the existing response using server.key
-            try:
-                response_data = ecies_client.decrypt_json(response_payload)
-                allocation = _validate_allocation_response(response_data)
-                # Get broker wallet from the response transaction
-                recovered_broker_wallet = client.get_response_sender(
-                    broker.requests_contract, existing_request_id
-                ) or ""
-                print(f"Recovered allocation:")
-                print(f"  Prefix: {allocation.prefix}")
-                print(f"  Gateway: {allocation.gateway}")
-                print(f"  Broker endpoint: {allocation.broker_endpoint}")
-                if recovered_broker_wallet:
-                    print(f"  Broker wallet: {recovered_broker_wallet}")
-
-                # Load existing config to get WG keys, or generate new ones
-                existing_config = load_allocation_config(Path(args.config_dir))
-                if existing_config and existing_config.nft_contract == args.nft_contract:
-                    wg_private_key = existing_config.wg_private_key
-                    wg_public_key = existing_config.wg_public_key
-                    print("Using existing WireGuard keys from saved config")
-                else:
-                    print("Generating new WireGuard keypair...")
-                    wg_private_key, wg_public_key = generate_wireguard_keypair()
-
-                # Save configuration
-                config = AllocationConfig(
-                    prefix=allocation.prefix,
-                    gateway=allocation.gateway,
-                    broker_pubkey=allocation.broker_pubkey,
-                    broker_endpoint=allocation.broker_endpoint,
-                    nft_contract=args.nft_contract,
-                    request_id=existing_request_id,
-                    wg_private_key=wg_private_key,
-                    wg_public_key=wg_public_key,
-                    allocated_at=datetime.now(timezone.utc).isoformat(),
-                    broker_wallet=recovered_broker_wallet,
+            # Check request ID prefix to detect stale responses before decryption
+            embedded_id, encrypted_part = _extract_request_id_prefix(response_payload)
+            stale = False
+            if embedded_id != existing_request_id:
+                print(
+                    f"Response request ID ({embedded_id}) does not match "
+                    f"current request ({existing_request_id}) — stale response",
+                    file=sys.stderr,
                 )
-                save_allocation_config(Path(args.config_dir), config)
+                stale = True
+            else:
+                # IDs match (or legacy response) — try decryption
+                try:
+                    response_data = ecies_client.decrypt_json(encrypted_part)
+                    allocation = _validate_allocation_response(response_data)
+                    # Get broker wallet from the response transaction
+                    recovered_broker_wallet = client.get_response_sender(
+                        broker.requests_contract, existing_request_id
+                    ) or ""
+                    print(f"Recovered allocation:")
+                    print(f"  Prefix: {allocation.prefix}")
+                    print(f"  Gateway: {allocation.gateway}")
+                    print(f"  Broker endpoint: {allocation.broker_endpoint}")
+                    if recovered_broker_wallet:
+                        print(f"  Broker wallet: {recovered_broker_wallet}")
 
-                # Configure WireGuard if requested
-                if args.configure_wg:
-                    print("Configuring WireGuard tunnel...")
-                    configure_wireguard(
-                        interface=args.wg_interface,
-                        private_key=wg_private_key,
+                    # Load existing config to get WG keys, or generate new ones
+                    existing_config = load_allocation_config(Path(args.config_dir))
+                    if existing_config and existing_config.nft_contract == args.nft_contract:
+                        wg_private_key = existing_config.wg_private_key
+                        wg_public_key = existing_config.wg_public_key
+                        print("Using existing WireGuard keys from saved config")
+                    else:
+                        print("Generating new WireGuard keypair...")
+                        wg_private_key, wg_public_key = generate_wireguard_keypair()
+
+                    # Save configuration
+                    config = AllocationConfig(
                         prefix=allocation.prefix,
                         gateway=allocation.gateway,
                         broker_pubkey=allocation.broker_pubkey,
                         broker_endpoint=allocation.broker_endpoint,
+                        nft_contract=args.nft_contract,
+                        request_id=existing_request_id,
+                        wg_private_key=wg_private_key,
+                        wg_public_key=wg_public_key,
+                        allocated_at=datetime.now(timezone.utc).isoformat(),
+                        broker_wallet=recovered_broker_wallet,
                     )
+                    save_allocation_config(Path(args.config_dir), config)
 
-                print("Allocation recovered!")
-                return 0
-            except Exception as e:
-                print(f"Failed to decrypt existing response: {e}", file=sys.stderr)
-                print("The request may have been made with a different key", file=sys.stderr)
-                return 1
+                    # Configure WireGuard if requested
+                    if args.configure_wg:
+                        print("Configuring WireGuard tunnel...")
+                        configure_wireguard(
+                            interface=args.wg_interface,
+                            private_key=wg_private_key,
+                            prefix=allocation.prefix,
+                            gateway=allocation.gateway,
+                            broker_pubkey=allocation.broker_pubkey,
+                            broker_endpoint=allocation.broker_endpoint,
+                        )
+
+                    print("Allocation recovered!")
+                    return 0
+                except Exception as e:
+                    print(f"Failed to decrypt existing response: {e}", file=sys.stderr)
+                    stale = True
+
+            if stale:
+                # Stale or undecryptable response — the broker's post-approval
+                # verification will release this allocation. Wait briefly then
+                # fall through to submit a new request.
+                print(
+                    "Stale allocation detected — waiting for broker to release, "
+                    "then submitting new request...",
+                    file=sys.stderr,
+                )
+                existing_request_id = 0
         elif status == REQUEST_STATUS_PENDING:
             print("Request pending - waiting for response...")
             # Fall through to polling
@@ -944,10 +981,11 @@ def cmd_request(args: argparse.Namespace) -> int:
         print(f"  Pending... ({int(elapsed)}s)")
         time.sleep(poll_interval)
 
-    # Decrypt response
+    # Strip request ID prefix and decrypt response
     print("Decrypting response...")
+    _, encrypted_part = _extract_request_id_prefix(response_payload)
     try:
-        response_data = ecies_client.decrypt_json(response_payload)
+        response_data = ecies_client.decrypt_json(encrypted_part)
     except Exception as e:
         print(f"Failed to decrypt response: {e}", file=sys.stderr)
         return 1

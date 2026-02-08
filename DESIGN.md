@@ -50,7 +50,8 @@ The broker primarily operates in on-chain mode, monitoring the blockchain for al
 2. Fetches new requests via `getRequest(id)`
 3. Verifies NFT contract ownership
 4. Allocates prefix, adds WireGuard peer
-5. Submits encrypted response on-chain
+5. Submits response on-chain (request ID prefix + ECIES encrypted payload)
+6. Starts 2-minute tunnel verification — releases allocation if no WireGuard handshake
 
 ### 2. Internal API Server (Secondary)
 
@@ -690,6 +691,33 @@ If a request comes from the same NFT contract as an existing allocation:
 - The old WireGuard peer is removed, new one added
 
 This enables key rotation without losing the allocated prefix.
+
+### Response Payload Format
+
+Response payloads stored on-chain are prefixed with the request ID:
+
+```
+[8 bytes: request_id as big-endian u64][ECIES encrypted payload]
+```
+
+This allows the client to detect stale responses (e.g., after server re-install with a new ECIES key) without attempting decryption. The client compares the embedded request ID against the current on-chain request ID — a mismatch indicates the response belongs to a previous request cycle.
+
+### Post-Approval Tunnel Verification
+
+After approving a request, the broker tracks the allocation for tunnel verification. If no WireGuard handshake is detected within 2 minutes:
+- The allocation is released (WireGuard peer removed, IPAM freed, on-chain release)
+- This allows the client to submit a fresh request with a new key
+
+This handles the case where a server was re-installed (new ECIES keypair), the client detects the stale response, and needs the old allocation released before it can re-request.
+
+### Stale Response Recovery (Client)
+
+When the client finds an existing approved allocation on-chain:
+1. Extracts the request ID prefix from the response payload
+2. If the embedded ID doesn't match the current request ID → stale response
+3. If IDs match but decryption fails → also stale
+4. In both cases, the client resets and submits a new request
+5. The broker's tunnel verification will auto-release the stale allocation
 
 ### Encryption
 
