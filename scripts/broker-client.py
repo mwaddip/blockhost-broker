@@ -19,6 +19,8 @@ Requirements:
 
 from __future__ import annotations
 
+CLIENT_VERSION = "0.2.0"  # request-id prefix + stale detection
+
 import argparse
 import ipaddress
 import json
@@ -970,7 +972,7 @@ def cmd_request(args: argparse.Namespace) -> int:
 
     # Poll for response (enforce minimum interval to avoid RPC spam)
     poll_interval = max(args.poll_interval, MIN_POLL_INTERVAL)
-    print("Waiting for broker response...")
+    print(f"Waiting for broker response (request_id={request_id})...")
     start_time = time.time()
     broker_wallet = ""
     while True:
@@ -1344,6 +1346,9 @@ def cmd_release(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Blockhost Broker Client - Request IPv6 prefix allocations via on-chain authentication"
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"broker-client {CLIENT_VERSION}",
     )
     parser.add_argument(
         "--rpc-url",
