@@ -121,6 +121,10 @@ blockhost-broker/
 └── registry-testnet.json      # Remote config for test registry address
 ```
 
+## Interface Contract (REFERENCE)
+
+**`COMMON_INTERFACE.md` documents how the broker-allocation.json file is consumed by blockhost-common.** Read section 7 before changing the allocation JSON schema — consumers parse it via `load_broker_allocation()` and expect keys: `prefix`, `gateway`, `broker_pubkey`, `broker_endpoint`. If the schema changes, common and all provisioners break.
+
 ## Architecture
 
 See DESIGN.md for the on-chain authentication flow.
