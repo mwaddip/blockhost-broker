@@ -123,7 +123,14 @@ blockhost-broker/
 
 ## Interface Contract (REFERENCE)
 
-**`COMMON_INTERFACE.md` documents how the broker-allocation.json file is consumed by blockhost-common.** Read section 7 before changing the allocation JSON schema — consumers parse it via `load_broker_allocation()` and expect keys: `prefix`, `gateway`, `broker_pubkey`, `broker_endpoint`. If the schema changes, common and all provisioners break.
+Interface contracts live in the `facts/` submodule (`blockhost-facts` repo) — one source of truth, no local copies.
+
+| Contract | Path |
+|----------|------|
+| Provisioner Interface | `facts/PROVISIONER_INTERFACE.md` |
+| Common Interface | `facts/COMMON_INTERFACE.md` |
+
+**Read `facts/COMMON_INTERFACE.md` section 7 before changing the allocation JSON schema** — consumers parse it via `load_broker_allocation()` and expect keys: `prefix`, `gateway`, `broker_pubkey`, `broker_endpoint`. If the schema changes, common and all provisioners break.
 
 ## Architecture
 
