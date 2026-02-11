@@ -19,7 +19,7 @@ Environment variables should be in `~/projects/sharedenv/blockhost.env` (not com
 - `OPERATOR_PRIVATE_KEY` - Operator wallet private key (BrokerRequests owner)
 - `BLOCKHOST_NFT` - AccessCredentialNFT contract address
 - `BLOCKHOST_CONTRACT` - Main Blockhost contract address
-- `SEPOLIA_RPC` - Sepolia RPC endpoint
+- `RPC_URL` - Sepolia RPC endpoint
 
 ## Deployed Contracts (Sepolia Testnet)
 
@@ -61,7 +61,7 @@ ssh linuxuser@95.179.128.177 'sudo mv /tmp/blockhost-broker /usr/bin/ && sudo sy
 # Deploy V2 contracts (Foundry)
 cd contracts-foundry
 forge build && forge test
-forge script script/DeployV2.s.sol --rpc-url $SEPOLIA_RPC --broadcast
+forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
 
 # Run client (on Proxmox server)
 broker-client request --nft-contract 0x... --wallet-key /path/to/key
