@@ -17,6 +17,7 @@ mod api;
 mod config;
 mod crypto;
 mod db;
+mod dns;
 mod eth;
 mod setup;
 mod wg;
@@ -249,6 +250,15 @@ fn cmd_check_config(config: &Config) -> Result<()> {
     println!("\nDatabase:");
     println!("  Path: {}", config.database.path.display());
 
+    if config.dns.enabled {
+        println!("\nDNS Server: ENABLED");
+        println!("  Domain: {}", config.dns.domain);
+        println!("  Listen: {}", config.dns.listen);
+        println!("  TTL: {}s", config.dns.ttl);
+    } else {
+        println!("\nDNS Server: DISABLED");
+    }
+
     Ok(())
 }
 
@@ -410,6 +420,19 @@ async fn cmd_run(config: &Config, host: Option<String>, port: Option<u16>) -> Re
     let listen_port = port.unwrap_or(config.api.listen_port);
     let listen_addr = format!("{}:{}", listen_host, listen_port);
 
+    // Spawn DNS server if enabled
+    let dns_handle = if config.dns.enabled {
+        let dns_config = config.dns.clone();
+        let prefix = config.broker.upstream_prefix;
+        Some(tokio::spawn(async move {
+            if let Err(e) = dns::run_dns_server(&dns_config, prefix).await {
+                error!(error = %e, "DNS server failed");
+            }
+        }))
+    } else {
+        None
+    };
+
     if config.onchain.enabled {
         // Validate on-chain config
         if config.onchain.requests_contract.is_none() {
@@ -443,6 +466,11 @@ async fn cmd_run(config: &Config, host: Option<String>, port: Option<u16>) -> Re
         run_api_only(config.clone(), ipam, wg, &listen_addr).await?;
     }
 
+    // Abort DNS server task on shutdown
+    if let Some(handle) = dns_handle {
+        handle.abort();
+    }
+
     Ok(())
 }
 
@@ -457,6 +485,7 @@ async fn run_with_onchain_monitor(
         config.onchain.clone(),
         config.broker.clone(),
         config.wireguard.clone(),
+        config.dns.clone(),
         ipam.clone(),
         wg.clone(),
     )

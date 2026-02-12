@@ -1,3 +1,12 @@
+blockhost-broker (0.3.0-1) unstable; urgency=medium
+
+  * Add optional dns_zone field to allocation responses
+  * Drop root: run as dedicated blockhost user with capabilities
+  * Add CAP_NET_BIND_SERVICE for DNS on port 53
+  * Built-in authoritative DNS server for hex-based AAAA records
+
+ -- Blockhost <contact@blockhost.io>  Thu, 12 Feb 2026 00:00:00 +0000
+
 blockhost-broker (0.2.0-1) unstable; urgency=medium
 
   * V2 contracts: overwrite-on-duplicate, capacity tracking, re-registration

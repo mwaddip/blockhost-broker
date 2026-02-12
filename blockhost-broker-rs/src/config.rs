@@ -221,6 +221,50 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// DNS server configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DnsConfig {
+    /// Enable the built-in authoritative DNS server.
+    pub enabled: bool,
+
+    /// Domain name this server is authoritative for (e.g. "blockhost.thawaras.org").
+    pub domain: String,
+
+    /// Listen address for UDP DNS.
+    pub listen: String,
+
+    /// TTL for synthesized records (seconds).
+    pub ttl: u32,
+}
+
+impl Default for DnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            domain: String::new(),
+            listen: "0.0.0.0:53".to_string(),
+            ttl: 300,
+        }
+    }
+}
+
+impl DnsConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.enabled && self.domain.is_empty() {
+            return Err(ConfigError::ValidationError(
+                "dns.domain must be set when DNS server is enabled".to_string(),
+            ));
+        }
+        if self.enabled && self.domain.ends_with('.') {
+            return Err(ConfigError::ValidationError(
+                "dns.domain must not end with a trailing dot".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Main configuration container.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
@@ -230,6 +274,7 @@ pub struct Config {
     pub api: ApiConfig,
     pub database: DatabaseConfig,
     pub onchain: OnchainConfig,
+    pub dns: DnsConfig,
 }
 
 impl Config {
@@ -249,6 +294,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.broker.validate()?;
         self.onchain.validate()?;
+        self.dns.validate()?;
         Ok(())
     }
 }
@@ -288,7 +334,27 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert!(!config.onchain.enabled);
+        assert!(!config.dns.enabled);
         assert_eq!(config.broker.allocation_size, 120);
+    }
+
+    #[test]
+    fn test_dns_config_validation() {
+        let mut dns = DnsConfig::default();
+        // Disabled is always valid even without domain
+        dns.validate().unwrap();
+
+        // Enabled without domain should fail
+        dns.enabled = true;
+        assert!(dns.validate().is_err());
+
+        // Enabled with domain should pass
+        dns.domain = "blockhost.thawaras.org".to_string();
+        dns.validate().unwrap();
+
+        // Trailing dot should fail
+        dns.domain = "blockhost.thawaras.org.".to_string();
+        assert!(dns.validate().is_err());
     }
 
     #[test]

@@ -289,6 +289,46 @@ Features:
 - ETH top-up via MetaMask
 - Configurable session expiry (`SESSION_LIFETIME_HOURS`, default: 1 hour)
 
+### 9. DNS Server (Optional)
+
+The broker includes a built-in authoritative DNS server that synthesizes AAAA records for allocated prefixes. It resolves `<hex>.<domain>` to `<upstream_prefix>::<hex>` — purely synthetic, no database lookup.
+
+For example, with prefix `2a11:6c7:f04:276::/64` and domain `blockhost.thawaras.org`:
+- `101.blockhost.thawaras.org` → `2a11:6c7:f04:276::101`
+- `2.blockhost.thawaras.org` → `2a11:6c7:f04:276::2`
+- `ff.blockhost.thawaras.org` → `2a11:6c7:f04:276::ff`
+
+**Enable in config:**
+
+```toml
+[dns]
+enabled = true
+domain = "blockhost.thawaras.org"
+listen = "0.0.0.0:53"
+ttl = 300
+```
+
+**NS delegation setup at your registrar:**
+
+```
+blockhost.thawaras.org.       NS    ns1.blockhost.thawaras.org.
+ns1.blockhost.thawaras.org.   A     <your-broker-ip>
+```
+
+**Verify:**
+
+```bash
+dig AAAA 101.blockhost.thawaras.org @<broker-ip>
+dig SOA blockhost.thawaras.org @<broker-ip>
+dig NS blockhost.thawaras.org @<broker-ip>
+```
+
+If using UFW, allow DNS:
+
+```bash
+ufw allow 53/udp comment "DNS"
+```
+
 ## Broker Client
 
 The `broker-client` runs on Blockhost servers (Proxmox) to request IPv6 allocations.

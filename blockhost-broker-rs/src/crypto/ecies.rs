@@ -57,6 +57,9 @@ pub struct ResponsePayload {
     pub broker_pubkey: String,
     /// Broker endpoint (e.g., "95.179.128.177:51820").
     pub broker_endpoint: String,
+    /// DNS zone for this broker (e.g., "blockhost.thawaras.org"). Optional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_zone: Option<String>,
 }
 
 /// ECIES encryption handler using secp256k1.
@@ -244,6 +247,7 @@ mod tests {
             gateway: "2001:db8::1".to_string(),
             broker_pubkey: "test-pubkey".to_string(),
             broker_endpoint: "example.com:51820".to_string(),
+            dns_zone: None,
         };
 
         let encrypted = sender.encrypt_json(&response, recipient.public_key_bytes()).unwrap();

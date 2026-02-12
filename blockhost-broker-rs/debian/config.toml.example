@@ -63,3 +63,11 @@ requests_contract = "0xCD75c00dBB3F05cF27f16699591f4256a798e694"
 
 # Poll interval for new requests (milliseconds)
 poll_interval_ms = 5000
+
+# [dns]
+# # Authoritative DNS server for synthesized AAAA records
+# # Resolves <hex>.<domain> → <upstream_prefix>::<hex>
+# enabled = false
+# domain = "your.domain.example.com"
+# listen = "0.0.0.0:53"
+# ttl = 300

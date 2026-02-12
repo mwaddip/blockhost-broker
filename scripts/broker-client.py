@@ -19,7 +19,7 @@ Requirements:
 
 from __future__ import annotations
 
-CLIENT_VERSION = "0.3.0"  # V2 contracts: overwrite, capacity-aware broker selection
+CLIENT_VERSION = "0.4.0"  # dns_zone support, backwards-compatible
 
 import argparse
 import ipaddress
@@ -270,6 +270,7 @@ def _validate_allocation_response(data: dict) -> "AllocationResponse":
         gateway=data["gateway"],
         broker_pubkey=data["brokerPubkey"],
         broker_endpoint=data["brokerEndpoint"],
+        dns_zone=data.get("dnsZone", ""),
     )
 
 
@@ -297,6 +298,7 @@ class AllocationResponse:
     gateway: str
     broker_pubkey: str
     broker_endpoint: str
+    dns_zone: str = ""
 
 
 @dataclass
@@ -313,6 +315,7 @@ class AllocationConfig:
     wg_public_key: str
     allocated_at: str
     broker_wallet: str = ""  # Wallet address that submitted the response
+    dns_zone: str = ""  # DNS zone for this broker (optional)
 
 
 class ECIESClient:
@@ -716,6 +719,7 @@ def save_allocation_config(config_dir: Path, config: AllocationConfig) -> None:
                 "wg_public_key": config.wg_public_key,
                 "allocated_at": config.allocated_at,
                 "broker_wallet": config.broker_wallet,
+                "dns_zone": config.dns_zone,
             },
             indent=2,
         )
@@ -743,6 +747,7 @@ def load_allocation_config(config_dir: Path) -> Optional[AllocationConfig]:
         wg_public_key=data["wg_public_key"],
         allocated_at=data["allocated_at"],
         broker_wallet=data.get("broker_wallet", ""),
+        dns_zone=data.get("dns_zone", ""),
     )
 
 
@@ -925,6 +930,7 @@ def cmd_request(args: argparse.Namespace) -> int:
                         wg_public_key=wg_public_key,
                         allocated_at=datetime.now(timezone.utc).isoformat(),
                         broker_wallet=recovered_broker_wallet,
+                        dns_zone=allocation.dns_zone,
                     )
                     save_allocation_config(Path(args.config_dir), config)
 
@@ -1052,6 +1058,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         wg_public_key=wg_public_key,
         allocated_at=datetime.now(timezone.utc).isoformat(),
         broker_wallet=broker_wallet,
+        dns_zone=allocation.dns_zone,
     )
     save_allocation_config(Path(args.config_dir), config)
 

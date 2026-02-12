@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{BrokerConfig, OnchainConfig, WireGuardConfig};
+use crate::config::{BrokerConfig, DnsConfig, OnchainConfig, WireGuardConfig};
 use crate::crypto::{EciesEncryption, RequestPayload, ResponsePayload};
 use crate::db::Ipam;
 use crate::wg::WireGuardManager;
@@ -76,6 +76,7 @@ pub struct OnchainMonitor {
     onchain_config: OnchainConfig,
     broker_config: BrokerConfig,
     wg_config: WireGuardConfig,
+    dns_config: DnsConfig,
     ipam: Arc<tokio::sync::Mutex<Ipam>>,
     wg: Arc<WireGuardManager>,
     provider: Provider<Http>,
@@ -97,6 +98,7 @@ impl OnchainMonitor {
         onchain_config: OnchainConfig,
         broker_config: BrokerConfig,
         wg_config: WireGuardConfig,
+        dns_config: DnsConfig,
         ipam: Arc<tokio::sync::Mutex<Ipam>>,
         wg: Arc<WireGuardManager>,
     ) -> Result<Self, MonitorError> {
@@ -180,6 +182,7 @@ impl OnchainMonitor {
             onchain_config,
             broker_config,
             wg_config,
+            dns_config,
             ipam,
             wg,
             provider,
@@ -632,6 +635,11 @@ impl OnchainMonitor {
             gateway: self.broker_config.broker_ipv6.to_string(),
             broker_pubkey: wg_pubkey,
             broker_endpoint: self.wg_config.public_endpoint.clone(),
+            dns_zone: if self.dns_config.enabled {
+                Some(self.dns_config.domain.clone())
+            } else {
+                None
+            },
         };
 
         // Encrypt response for the server's new key
