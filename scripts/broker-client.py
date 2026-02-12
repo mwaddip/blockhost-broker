@@ -10,6 +10,7 @@ It can be deployed independently to Proxmox servers.
 
 Usage:
     broker-client.py request --nft-contract 0x... --wallet-key /path/to/key
+    broker-client.py renew --nft-contract 0x... --wallet-key /path/to/key
     broker-client.py status --nft-contract 0x...
     broker-client.py release --nft-contract 0x... --wallet-key /path/to/key
 
@@ -316,6 +317,15 @@ class AllocationConfig:
     allocated_at: str
     broker_wallet: str = ""  # Wallet address that submitted the response
     dns_zone: str = ""  # DNS zone for this broker (optional)
+
+
+@dataclass
+class BrokerContract:
+    """Saved broker identity for renewals."""
+
+    requests_contract: str
+    broker_pubkey: str  # hex-encoded ECIES public key
+    broker_id: int = 0
 
 
 class ECIESClient:
@@ -760,6 +770,56 @@ def delete_allocation_config(config_dir: Path) -> bool:
     return False
 
 
+def save_broker_contract(config_dir: Path, contract: BrokerContract) -> None:
+    """Save broker contract info for future renewals."""
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "broker-contract.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "requests_contract": contract.requests_contract,
+                "broker_pubkey": contract.broker_pubkey,
+                "broker_id": contract.broker_id,
+            },
+            indent=2,
+        )
+    )
+    config_file.chmod(0o600)
+    print(f"Broker contract saved to {config_file}")
+
+
+def load_broker_contract(config_dir: Path) -> Optional[BrokerContract]:
+    """Load saved broker contract info."""
+    config_file = config_dir / "broker-contract.json"
+    if not config_file.exists():
+        return None
+
+    try:
+        data = json.loads(config_file.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        raise ValueError(f"Corrupt broker contract file {config_file}: {e}")
+
+    addr = data.get("requests_contract", "")
+    if not isinstance(addr, str) or len(addr) != 42 or not addr.startswith("0x"):
+        raise ValueError(f"Invalid requests_contract in {config_file}: {addr!r}")
+
+    pubkey = data.get("broker_pubkey", "")
+    if not isinstance(pubkey, str) or len(pubkey) < 64:
+        raise ValueError(f"Invalid broker_pubkey in {config_file}")
+
+    # Validate pubkey is valid hex
+    try:
+        bytes.fromhex(pubkey)
+    except ValueError:
+        raise ValueError(f"broker_pubkey is not valid hex in {config_file}")
+
+    return BrokerContract(
+        requests_contract=addr,
+        broker_pubkey=pubkey,
+        broker_id=data.get("broker_id", 0),
+    )
+
+
 def teardown_wireguard(interface: str) -> None:
     """Tear down WireGuard interface and remove persistent config."""
     # Stop wg-quick interface
@@ -788,6 +848,138 @@ def teardown_wireguard(interface: str) -> None:
             print(f"Removed {wg_conf}")
         except PermissionError:
             print(f"Warning: Could not remove {wg_conf} (permission denied)", file=sys.stderr)
+
+
+def _submit_poll_save(
+    client: BrokerClient,
+    ecies_client: "ECIESClient",
+    account: "LocalAccount",
+    broker: BrokerInfo,
+    nft_contract: str,
+    config_dir: Path,
+    timeout: int,
+    poll_interval: int,
+    configure_wg: bool,
+    wg_interface: str,
+    existing_request_id: int = 0,
+) -> int:
+    """Submit request to broker, poll for response, decrypt, and save config.
+
+    If existing_request_id is nonzero, skips submission and polls that request.
+    Returns 0 on success, 1 on failure.
+    """
+    # Generate WireGuard keypair
+    print("Generating WireGuard keypair...")
+    wg_private_key, wg_public_key = generate_wireguard_keypair()
+
+    if existing_request_id == 0:
+        # Build request payload
+        payload = {
+            "wgPubkey": wg_public_key,
+            "nftContract": Web3.to_checksum_address(nft_contract),
+            "serverPubkey": ecies_client.public_key_hex,
+        }
+
+        # Encrypt payload
+        print("Encrypting request payload...")
+        encrypted_payload = ecies_client.encrypt_json(payload, broker.encryption_pubkey)
+
+        # Submit request
+        print("Submitting allocation request on-chain...")
+        request_id = client.submit_request(
+            account=account,
+            requests_contract=broker.requests_contract,
+            nft_contract=nft_contract,
+            encrypted_payload=encrypted_payload,
+        )
+        print(f"Request submitted: #{request_id}")
+    else:
+        request_id = existing_request_id
+
+    # Poll for response (enforce minimum interval to avoid RPC spam)
+    poll_interval = max(poll_interval, MIN_POLL_INTERVAL)
+    print(f"Waiting for broker response (request_id={request_id})...")
+    start_time = time.time()
+    broker_wallet = ""
+    while True:
+        status, response_payload = client.get_request_status(
+            broker.requests_contract, request_id
+        )
+
+        if status == REQUEST_STATUS_APPROVED:
+            print("Request approved!")
+            broker_wallet = client.get_response_sender(broker.requests_contract, request_id) or ""
+            if broker_wallet:
+                print(f"Broker wallet: {broker_wallet}")
+            break
+        elif status == REQUEST_STATUS_EXPIRED:
+            print("Request expired (silent rejection or timeout)", file=sys.stderr)
+            return 1
+
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            print(f"Timeout waiting for response after {timeout}s", file=sys.stderr)
+            return 1
+
+        print(f"  Pending... ({int(elapsed)}s)")
+        time.sleep(poll_interval)
+
+    # Strip request ID prefix and decrypt response
+    print("Decrypting response...")
+    _, encrypted_part = _extract_request_id_prefix(response_payload)
+    try:
+        response_data = ecies_client.decrypt_json(encrypted_part)
+    except Exception:
+        # Fallback: try raw payload (V1 server without request ID prefix)
+        try:
+            response_data = ecies_client.decrypt_json(response_payload)
+        except Exception as e:
+            print(f"Failed to decrypt response: {e}", file=sys.stderr)
+            return 1
+
+    allocation = _validate_allocation_response(response_data)
+
+    print(f"Allocated prefix: {allocation.prefix}")
+    print(f"Gateway: {allocation.gateway}")
+    print(f"Broker endpoint: {allocation.broker_endpoint}")
+
+    # Save configuration
+    config = AllocationConfig(
+        prefix=allocation.prefix,
+        gateway=allocation.gateway,
+        broker_pubkey=allocation.broker_pubkey,
+        broker_endpoint=allocation.broker_endpoint,
+        nft_contract=nft_contract,
+        request_id=request_id,
+        wg_private_key=wg_private_key,
+        wg_public_key=wg_public_key,
+        allocated_at=datetime.now(timezone.utc).isoformat(),
+        broker_wallet=broker_wallet,
+        dns_zone=allocation.dns_zone,
+    )
+    save_allocation_config(config_dir, config)
+    save_broker_contract(
+        config_dir,
+        BrokerContract(
+            requests_contract=broker.requests_contract,
+            broker_pubkey=broker.encryption_pubkey.hex(),
+            broker_id=broker.id,
+        ),
+    )
+
+    # Configure WireGuard if requested
+    if configure_wg:
+        print("Configuring WireGuard tunnel...")
+        configure_wireguard(
+            interface=wg_interface,
+            private_key=wg_private_key,
+            prefix=allocation.prefix,
+            gateway=allocation.gateway,
+            broker_pubkey=allocation.broker_pubkey,
+            broker_endpoint=allocation.broker_endpoint,
+        )
+
+    return 0
 
 
 def cmd_request(args: argparse.Namespace) -> int:
@@ -933,6 +1125,14 @@ def cmd_request(args: argparse.Namespace) -> int:
                         dns_zone=allocation.dns_zone,
                     )
                     save_allocation_config(Path(args.config_dir), config)
+                    save_broker_contract(
+                        Path(args.config_dir),
+                        BrokerContract(
+                            requests_contract=broker.requests_contract,
+                            broker_pubkey=broker.encryption_pubkey.hex(),
+                            broker_id=broker.id,
+                        ),
+                    )
 
                     # Configure WireGuard if requested
                     if args.configure_wg:
@@ -970,111 +1170,98 @@ def cmd_request(args: argparse.Namespace) -> int:
             print(f"Previous request not approved (status: {status})", file=sys.stderr)
             return 1
 
-    # Generate WireGuard keypair
-    print("Generating WireGuard keypair...")
-    wg_private_key, wg_public_key = generate_wireguard_keypair()
-
-    if existing_request_id == 0:
-        # Build request payload
-        payload = {
-            "wgPubkey": wg_public_key,
-            "nftContract": Web3.to_checksum_address(args.nft_contract),
-            "serverPubkey": ecies_client.public_key_hex,
-        }
-
-        # Encrypt payload
-        print("Encrypting request payload...")
-        encrypted_payload = ecies_client.encrypt_json(payload, broker.encryption_pubkey)
-
-        # Submit request
-        print("Submitting allocation request on-chain...")
-        request_id = client.submit_request(
-            account=account,
-            requests_contract=broker.requests_contract,
-            nft_contract=args.nft_contract,
-            encrypted_payload=encrypted_payload,
-        )
-        print(f"Request submitted: #{request_id}")
-    else:
-        request_id = existing_request_id
-
-    # Poll for response (enforce minimum interval to avoid RPC spam)
-    poll_interval = max(args.poll_interval, MIN_POLL_INTERVAL)
-    print(f"Waiting for broker response (request_id={request_id})...")
-    start_time = time.time()
-    broker_wallet = ""
-    while True:
-        status, response_payload = client.get_request_status(
-            broker.requests_contract, request_id
-        )
-
-        if status == REQUEST_STATUS_APPROVED:
-            print("Request approved!")
-            # Get the broker's wallet address from the response transaction
-            broker_wallet = client.get_response_sender(broker.requests_contract, request_id) or ""
-            if broker_wallet:
-                print(f"Broker wallet: {broker_wallet}")
-            break
-        elif status == REQUEST_STATUS_EXPIRED:
-            print("Request expired (silent rejection or timeout)", file=sys.stderr)
-            return 1
-
-        elapsed = time.time() - start_time
-        if elapsed > args.timeout:
-            print(f"Timeout waiting for response after {args.timeout}s", file=sys.stderr)
-            return 1
-
-        print(f"  Pending... ({int(elapsed)}s)")
-        time.sleep(poll_interval)
-
-    # Strip request ID prefix and decrypt response
-    print("Decrypting response...")
-    _, encrypted_part = _extract_request_id_prefix(response_payload)
-    try:
-        response_data = ecies_client.decrypt_json(encrypted_part)
-    except Exception:
-        # Fallback: try raw payload (V1 server without request ID prefix)
-        try:
-            response_data = ecies_client.decrypt_json(response_payload)
-        except Exception as e:
-            print(f"Failed to decrypt response: {e}", file=sys.stderr)
-            return 1
-
-    allocation = _validate_allocation_response(response_data)
-
-    print(f"Allocated prefix: {allocation.prefix}")
-    print(f"Gateway: {allocation.gateway}")
-    print(f"Broker endpoint: {allocation.broker_endpoint}")
-
-    # Save configuration
-    config = AllocationConfig(
-        prefix=allocation.prefix,
-        gateway=allocation.gateway,
-        broker_pubkey=allocation.broker_pubkey,
-        broker_endpoint=allocation.broker_endpoint,
+    result = _submit_poll_save(
+        client=client,
+        ecies_client=ecies_client,
+        account=account,
+        broker=broker,
         nft_contract=args.nft_contract,
-        request_id=request_id,
-        wg_private_key=wg_private_key,
-        wg_public_key=wg_public_key,
-        allocated_at=datetime.now(timezone.utc).isoformat(),
-        broker_wallet=broker_wallet,
-        dns_zone=allocation.dns_zone,
+        config_dir=Path(args.config_dir),
+        timeout=args.timeout,
+        poll_interval=args.poll_interval,
+        configure_wg=args.configure_wg,
+        wg_interface=args.wg_interface,
+        existing_request_id=existing_request_id,
     )
-    save_allocation_config(Path(args.config_dir), config)
-
-    # Configure WireGuard if requested
-    if args.configure_wg:
-        print("Configuring WireGuard tunnel...")
-        configure_wireguard(
-            interface=args.wg_interface,
-            private_key=wg_private_key,
-            prefix=allocation.prefix,
-            gateway=allocation.gateway,
-            broker_pubkey=allocation.broker_pubkey,
-            broker_endpoint=allocation.broker_endpoint,
-        )
+    if result != 0:
+        return result
 
     print("Allocation complete!")
+    return 0
+
+
+def cmd_renew(args: argparse.Namespace) -> int:
+    """Handle renew command - re-request from the same broker."""
+    # Load saved broker contract
+    try:
+        broker_contract = load_broker_contract(Path(args.config_dir))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if not broker_contract:
+        print(
+            "No previous broker allocation found — use `request` for initial allocation",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Renewing from broker contract: {broker_contract.requests_contract}")
+    if broker_contract.broker_id:
+        print(f"  Broker ID: #{broker_contract.broker_id}")
+
+    # Load server key for ECIES operations
+    server_key_file = Path(args.config_dir) / "server.key"
+    if not server_key_file.exists():
+        print(f"Server key not found at {server_key_file}", file=sys.stderr)
+        print("Run the setup wizard first to generate the server keypair", file=sys.stderr)
+        return 1
+
+    server_key = server_key_file.read_text().strip()
+    ecies_client = ECIESClient(private_key_hex=server_key)
+    print(f"Using server key: {ecies_client.public_key_hex[:16]}...")
+
+    # Load wallet
+    wallet_key = Path(args.wallet_key).read_text().strip()
+    account = Account.from_key(wallet_key)
+    print(f"Using wallet: {account.address}")
+
+    # Initialize client (no registry needed)
+    client = BrokerClient(
+        rpc_url=args.rpc_url,
+        chain_id=args.chain_id,
+    )
+
+    # Build broker info from saved contract
+    broker_pubkey_bytes = validate_hex_pubkey(
+        broker_contract.broker_pubkey, "saved broker ECIES public key"
+    )
+    broker = BrokerInfo(
+        id=broker_contract.broker_id,
+        operator="",
+        requests_contract=broker_contract.requests_contract,
+        encryption_pubkey=broker_pubkey_bytes,
+        region="",
+        capacity=0,
+        current_load=0,
+    )
+
+    result = _submit_poll_save(
+        client=client,
+        ecies_client=ecies_client,
+        account=account,
+        broker=broker,
+        nft_contract=args.nft_contract,
+        config_dir=Path(args.config_dir),
+        timeout=args.timeout,
+        poll_interval=args.poll_interval,
+        configure_wg=args.configure_wg,
+        wg_interface=args.wg_interface,
+    )
+    if result != 0:
+        return result
+
+    print("Renewal complete!")
     return 0
 
 
@@ -1468,6 +1655,43 @@ def main() -> int:
         help="WireGuard interface name (default: wg-broker)",
     )
 
+    # Renew command
+    renew_parser = subparsers.add_parser(
+        "renew", help="Re-request allocation from the same broker"
+    )
+    renew_parser.add_argument(
+        "--nft-contract",
+        required=True,
+        help="AccessCredentialNFT contract address",
+    )
+    renew_parser.add_argument(
+        "--wallet-key",
+        required=True,
+        help="Path to wallet private key file",
+    )
+    renew_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
+        help=f"Timeout for waiting for response (default: {DEFAULT_TIMEOUT}s)",
+    )
+    renew_parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=DEFAULT_POLL_INTERVAL,
+        help=f"Poll interval (default: {DEFAULT_POLL_INTERVAL}s)",
+    )
+    renew_parser.add_argument(
+        "--configure-wg",
+        action="store_true",
+        help="Configure WireGuard tunnel after allocation",
+    )
+    renew_parser.add_argument(
+        "--wg-interface",
+        default="wg-broker",
+        help="WireGuard interface name (default: wg-broker)",
+    )
+
     # Status command
     status_parser = subparsers.add_parser("status", help="Check allocation status")
     status_parser.add_argument(
@@ -1550,6 +1774,8 @@ def main() -> int:
 
     if args.command == "request":
         return cmd_request(args)
+    elif args.command == "renew":
+        return cmd_renew(args)
     elif args.command == "status":
         return cmd_status(args)
     elif args.command == "list-brokers":
