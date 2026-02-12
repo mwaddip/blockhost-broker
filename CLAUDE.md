@@ -121,9 +121,13 @@ blockhost-broker/
 └── registry-testnet.json      # Remote config for test registry address
 ```
 
-## Interface Contract (REFERENCE)
+## Interface Contract (REFERENCE — READ-ONLY)
 
 Interface contracts live in the `facts/` submodule (`blockhost-facts` repo) — one source of truth, no local copies.
+
+**DO NOT edit files inside `facts/`.** This submodule is managed externally and is outside this repo's domain. If changes appear needed:
+1. First try `git submodule update --remote facts` — the change may already exist upstream.
+2. If not, report the needed change to the user. Do not commit directly to the submodule.
 
 | Contract | Path |
 |----------|------|
