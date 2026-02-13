@@ -4,11 +4,11 @@
 //! No database lookup, no allocation check — labels are parsed as hex
 //! and OR'd into the prefix network address.
 
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use anyhow::{Context, Result};
 use ipnet::Ipv6Net;
-use simple_dns::rdata::{RData, AAAA, NS, SOA};
+use simple_dns::rdata::{RData, A, AAAA, NS, SOA};
 use simple_dns::{Name, Packet, PacketFlag, Question, ResourceRecord, OPCODE, RCODE};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
@@ -78,6 +78,8 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
     }
 
     let is_apex = qname_lower == domain_lower;
+    let ns1_name = format!("ns1.{}", domain_lower);
+    let is_ns1 = qname_lower == ns1_name;
 
     match question.qtype {
         // SOA at apex
@@ -88,9 +90,13 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::NS) if is_apex => {
             build_ns_response(&query, config)
         }
+        // A record for ns1.<domain>
+        simple_dns::QTYPE::TYPE(simple_dns::TYPE::A) if is_ns1 => {
+            build_ns1_a_response(&query, config)
+        }
         // AAAA — either apex (NODATA) or host lookup
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::AAAA) => {
-            if is_apex {
+            if is_apex || is_ns1 {
                 build_nodata_response(&query, config)
             } else {
                 build_aaaa_response(&query, question, config, prefix)
@@ -98,6 +104,8 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
         }
         // Any other type at apex → NODATA
         _ if is_apex => build_nodata_response(&query, config),
+        // ns1 exists but no matching type → NODATA
+        _ if is_ns1 => build_nodata_response(&query, config),
         // Any other type under zone → NODATA (name exists but no matching type)
         // unless the host label is invalid, in which case NXDOMAIN
         _ => {
@@ -218,7 +226,7 @@ fn build_soa_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
     Ok(response.build_bytes_vec_compressed()?)
 }
 
-/// Build an NS response.
+/// Build an NS response with optional glue A record.
 fn build_ns_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
     let mut response = new_response(query, RCODE::NoError);
 
@@ -228,7 +236,35 @@ fn build_ns_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::NS(ns));
     response.answers.push(rr);
 
+    // Glue record for ns1
+    if let Some(addr) = parse_ns_ipv4(config) {
+        let glue_name = Name::new_unchecked(&ns_name);
+        let glue = ResourceRecord::new(glue_name, simple_dns::CLASS::IN, config.ttl, RData::A(A { address: addr.into() }));
+        response.additional_records.push(glue);
+    }
+
     Ok(response.build_bytes_vec_compressed()?)
+}
+
+/// Build an A response for ns1.<domain>.
+fn build_ns1_a_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+    let addr = match parse_ns_ipv4(config) {
+        Some(a) => a,
+        None => return build_nodata_response(query, config),
+    };
+
+    let mut response = new_response(query, RCODE::NoError);
+    let ns_name = format!("ns1.{}", config.domain);
+    let name = Name::new_unchecked(&ns_name);
+    let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::A(A { address: addr.into() }));
+    response.answers.push(rr);
+
+    Ok(response.build_bytes_vec_compressed()?)
+}
+
+/// Parse the configured ns_ipv4 address.
+fn parse_ns_ipv4(config: &DnsConfig) -> Option<Ipv4Addr> {
+    config.ns_ipv4.as_deref()?.parse().ok()
 }
 
 /// Build a NODATA response (name exists, no matching type): empty answer + SOA in authority.
@@ -292,6 +328,7 @@ mod tests {
             domain: "blockhost.thawaras.org".to_string(),
             listen: "0.0.0.0:53".to_string(),
             ttl: 300,
+            ns_ipv4: Some("95.179.128.177".to_string()),
         }
     }
 
@@ -454,6 +491,48 @@ mod tests {
             }
             _ => panic!("Expected NS record"),
         }
+        // Glue A record in additional section
+        assert_eq!(response.additional_records.len(), 1);
+        match &response.additional_records[0].rdata {
+            RData::A(a) => {
+                let addr: Ipv4Addr = a.address.into();
+                assert_eq!(addr, "95.179.128.177".parse::<Ipv4Addr>().unwrap());
+            }
+            _ => panic!("Expected A glue record"),
+        }
+    }
+
+    #[test]
+    fn test_ns1_a_query() {
+        let config = test_config();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("ns1.blockhost.thawaras.org", simple_dns::TYPE::A);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        assert_eq!(response.answers.len(), 1);
+        match &response.answers[0].rdata {
+            RData::A(a) => {
+                let addr: Ipv4Addr = a.address.into();
+                assert_eq!(addr, "95.179.128.177".parse::<Ipv4Addr>().unwrap());
+            }
+            _ => panic!("Expected A record"),
+        }
+    }
+
+    #[test]
+    fn test_ns1_aaaa_nodata() {
+        let config = test_config();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("ns1.blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        assert!(response.answers.is_empty());
     }
 
     #[test]

@@ -236,6 +236,10 @@ pub struct DnsConfig {
 
     /// TTL for synthesized records (seconds).
     pub ttl: u32,
+
+    /// IPv4 address for ns1.<domain> glue record (e.g. "95.179.128.177").
+    #[serde(default)]
+    pub ns_ipv4: Option<String>,
 }
 
 impl Default for DnsConfig {
@@ -245,6 +249,7 @@ impl Default for DnsConfig {
             domain: String::new(),
             listen: "0.0.0.0:53".to_string(),
             ttl: 300,
+            ns_ipv4: None,
         }
     }
 }
