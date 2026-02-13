@@ -23,6 +23,7 @@ from __future__ import annotations
 CLIENT_VERSION = "0.4.0"  # dns_zone support, backwards-compatible
 
 import argparse
+import grp
 import ipaddress
 import json
 import os
@@ -734,7 +735,9 @@ def save_allocation_config(config_dir: Path, config: AllocationConfig) -> None:
             indent=2,
         )
     )
-    config_file.chmod(0o600)
+    gid = grp.getgrnam("blockhost").gr_gid
+    os.chown(config_file, 0, gid)
+    config_file.chmod(0o640)
 
     print(f"Allocation config saved to {config_file}")
 
@@ -784,7 +787,9 @@ def save_broker_contract(config_dir: Path, contract: BrokerContract) -> None:
             indent=2,
         )
     )
-    config_file.chmod(0o600)
+    gid = grp.getgrnam("blockhost").gr_gid
+    os.chown(config_file, 0, gid)
+    config_file.chmod(0o640)
     print(f"Broker contract saved to {config_file}")
 
 
