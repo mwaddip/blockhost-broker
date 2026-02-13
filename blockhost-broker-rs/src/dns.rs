@@ -117,12 +117,9 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
 fn extract_host_label<'a>(qname: &'a str, domain: &str) -> Option<&'a str> {
     let suffix = format!(".{}", domain);
     if let Some(prefix) = qname.strip_suffix(&suffix) {
-        // Only single-label hosts: no dots in the prefix
-        if !prefix.contains('.') {
-            Some(prefix)
-        } else {
-            None
-        }
+        // Take the rightmost label (closest to the domain).
+        // "101.domain" → "101", "foo.101.domain" → "101"
+        Some(prefix.rsplit('.').next().unwrap_or(prefix))
     } else {
         None
     }
@@ -351,8 +348,9 @@ mod tests {
         assert_eq!(extract_host_label("101.blockhost.thawaras.org", domain), Some("101"));
         assert_eq!(extract_host_label("ff.blockhost.thawaras.org", domain), Some("ff"));
         assert_eq!(extract_host_label("blockhost.thawaras.org", domain), None);
-        // Multi-level subdomain rejected
-        assert_eq!(extract_host_label("a.b.blockhost.thawaras.org", domain), None);
+        // Multi-level subdomain → rightmost label
+        assert_eq!(extract_host_label("a.b.blockhost.thawaras.org", domain), Some("b"));
+        assert_eq!(extract_host_label("foo.101.blockhost.thawaras.org", domain), Some("101"));
         // Unrelated domain
         assert_eq!(extract_host_label("other.example.com", domain), None);
     }
