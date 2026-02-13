@@ -8,31 +8,41 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use anyhow::{Context, Result};
 use ipnet::Ipv6Net;
-use simple_dns::rdata::{RData, A, AAAA, NS, SOA};
+use simple_dns::rdata::{RData, A, AAAA, NS, OPT, SOA};
 use simple_dns::{Name, Packet, PacketFlag, Question, ResourceRecord, OPCODE, RCODE};
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
 
 use crate::config::DnsConfig;
 
-/// Run the authoritative DNS server.
+/// Run the authoritative DNS server on both UDP and TCP.
 ///
-/// Binds to the configured UDP address and serves synthetic AAAA records
+/// Binds to the configured address and serves synthetic AAAA records
 /// for `<hex>.<domain>` queries. Loops forever; returns only on fatal
 /// bind errors.
 pub async fn run_dns_server(config: &DnsConfig, prefix: Ipv6Net) -> Result<()> {
-    let socket = UdpSocket::bind(&config.listen)
+    let udp_socket = UdpSocket::bind(&config.listen)
         .await
-        .with_context(|| format!("DNS: failed to bind to {}", config.listen))?;
+        .with_context(|| format!("DNS: failed to bind UDP to {}", config.listen))?;
 
-    info!(listen = %config.listen, domain = %config.domain, prefix = %prefix, "DNS server started");
+    let tcp_listener = TcpListener::bind(&config.listen)
+        .await
+        .with_context(|| format!("DNS: failed to bind TCP to {}", config.listen))?;
+
+    info!(listen = %config.listen, domain = %config.domain, prefix = %prefix, "DNS server started (UDP+TCP)");
+
+    let config_tcp = config.clone();
+    tokio::spawn(async move {
+        run_tcp_listener(tcp_listener, &config_tcp, prefix).await;
+    });
 
     let mut buf = [0u8; 512];
     loop {
-        let (len, src) = match socket.recv_from(&mut buf).await {
+        let (len, src) = match udp_socket.recv_from(&mut buf).await {
             Ok(v) => v,
             Err(e) => {
-                warn!(error = %e, "DNS: recv_from failed");
+                warn!(error = %e, "DNS: UDP recv_from failed");
                 continue;
             }
         };
@@ -45,9 +55,63 @@ pub async fn run_dns_server(config: &DnsConfig, prefix: Ipv6Net) -> Result<()> {
             }
         };
 
-        if let Err(e) = socket.send_to(&response, src).await {
-            warn!(error = %e, dst = %src, "DNS: send_to failed");
+        if let Err(e) = udp_socket.send_to(&response, src).await {
+            warn!(error = %e, dst = %src, "DNS: UDP send_to failed");
         }
+    }
+}
+
+/// Accept TCP connections and handle DNS queries (RFC 7766).
+/// Each query is prefixed with a 2-byte length.
+async fn run_tcp_listener(listener: TcpListener, config: &DnsConfig, prefix: Ipv6Net) {
+    loop {
+        let (mut stream, src) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "DNS: TCP accept failed");
+                continue;
+            }
+        };
+
+        let config = config.clone();
+        tokio::spawn(async move {
+            // Read 2-byte length prefix
+            let len = match stream.read_u16().await {
+                Ok(l) => l as usize,
+                Err(e) => {
+                    debug!(error = %e, src = %src, "DNS: TCP read length failed");
+                    return;
+                }
+            };
+
+            if len == 0 || len > 4096 {
+                debug!(len, src = %src, "DNS: TCP invalid query length");
+                return;
+            }
+
+            let mut buf = vec![0u8; len];
+            if let Err(e) = stream.read_exact(&mut buf).await {
+                debug!(error = %e, src = %src, "DNS: TCP read query failed");
+                return;
+            }
+
+            let response = match handle_query(&buf, &config, prefix) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    debug!(error = %e, src = %src, "DNS: TCP failed to handle query");
+                    return;
+                }
+            };
+
+            // Write 2-byte length prefix + response
+            if let Err(e) = stream.write_u16(response.len() as u16).await {
+                debug!(error = %e, src = %src, "DNS: TCP write length failed");
+                return;
+            }
+            if let Err(e) = stream.write_all(&response).await {
+                debug!(error = %e, src = %src, "DNS: TCP write response failed");
+            }
+        });
     }
 }
 
@@ -166,7 +230,8 @@ fn resolve_host(prefix: Ipv6Net, host_value: u128) -> Option<Ipv6Addr> {
     Some(Ipv6Addr::from(net_bits | host_value))
 }
 
-/// Initialize a response packet from a query, copying the ID and setting AA flag.
+/// Initialize a response packet from a query, copying the ID, question section,
+/// and setting AA flag. Echoes EDNS OPT if present in the query.
 fn new_response(query: &Packet, rcode: RCODE) -> Packet<'static> {
     let mut response = Packet::new_reply(query.id());
     *response.rcode_mut() = rcode;
@@ -174,6 +239,17 @@ fn new_response(query: &Packet, rcode: RCODE) -> Packet<'static> {
     response.remove_flags(PacketFlag::RECURSION_AVAILABLE);
     if query.has_flags(PacketFlag::RECURSION_DESIRED) {
         response.set_flags(PacketFlag::RECURSION_DESIRED);
+    }
+    // RFC 1035 §4.1.1: response MUST echo the question section
+    for q in &query.questions {
+        response.questions.push(q.clone().into_owned());
+    }
+    if query.opt().is_some() {
+        *response.opt_mut() = Some(OPT {
+            udp_packet_size: 512,
+            version: 0,
+            opt_codes: vec![],
+        });
     }
     response
 }
@@ -296,6 +372,9 @@ fn build_error_response(query: &Packet, rcode: RCODE) -> Result<Vec<u8>> {
     let mut response = Packet::new_reply(query.id());
     *response.rcode_mut() = rcode;
     response.remove_flags(PacketFlag::RECURSION_AVAILABLE);
+    for q in &query.questions {
+        response.questions.push(q.clone().into_owned());
+    }
     Ok(response.build_bytes_vec_compressed()?)
 }
 
@@ -417,6 +496,9 @@ mod tests {
 
         assert_eq!(response.rcode(), RCODE::NoError);
         assert!(response.has_flags(PacketFlag::AUTHORITATIVE_ANSWER));
+        // RFC 1035: question section must be echoed
+        assert_eq!(response.questions.len(), 1);
+        assert_eq!(response.questions[0].qname.to_string(), "101.blockhost.thawaras.org");
         assert_eq!(response.answers.len(), 1);
 
         match &response.answers[0].rdata {
