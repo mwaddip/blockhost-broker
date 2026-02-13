@@ -185,7 +185,7 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
 }
 
 /// Extract the host label (first label) from a qname under the domain.
-/// E.g., "101.blockhost.thawaras.org" with domain "blockhost.thawaras.org" → "101"
+/// E.g., "101.tunnel.example.org" with domain "tunnel.example.org" → "101"
 fn extract_host_label<'a>(qname: &'a str, domain: &str) -> Option<&'a str> {
     let suffix = format!(".{}", domain);
     if let Some(prefix) = qname.strip_suffix(&suffix) {
@@ -398,16 +398,16 @@ mod tests {
     use super::*;
 
     fn test_prefix() -> Ipv6Net {
-        "2a11:6c7:f04:276::/64".parse().unwrap()
+        "2001:db8:1:2::/64".parse().unwrap()
     }
 
     fn test_config() -> DnsConfig {
         DnsConfig {
             enabled: true,
-            domain: "blockhost.thawaras.org".to_string(),
+            domain: "tunnel.example.org".to_string(),
             listen: "0.0.0.0:53".to_string(),
             ttl: 300,
-            ns_ipv4: Some("95.179.128.177".to_string()),
+            ns_ipv4: Some("198.51.100.1".to_string()),
         }
     }
 
@@ -438,16 +438,16 @@ mod tests {
         let prefix = test_prefix();
 
         let addr = resolve_host(prefix, 0x101).unwrap();
-        assert_eq!(addr, "2a11:6c7:f04:276::101".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(addr, "2001:db8:1:2::101".parse::<Ipv6Addr>().unwrap());
 
         let addr = resolve_host(prefix, 2).unwrap();
-        assert_eq!(addr, "2a11:6c7:f04:276::2".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(addr, "2001:db8:1:2::2".parse::<Ipv6Addr>().unwrap());
 
         let addr = resolve_host(prefix, 0xff).unwrap();
-        assert_eq!(addr, "2a11:6c7:f04:276::ff".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(addr, "2001:db8:1:2::ff".parse::<Ipv6Addr>().unwrap());
 
         let addr = resolve_host(prefix, 0xdead_beef).unwrap();
-        assert_eq!(addr, "2a11:6c7:f04:276::dead:beef".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(addr, "2001:db8:1:2::dead:beef".parse::<Ipv6Addr>().unwrap());
     }
 
     #[test]
@@ -460,13 +460,13 @@ mod tests {
 
     #[test]
     fn test_extract_host_label() {
-        let domain = "blockhost.thawaras.org";
-        assert_eq!(extract_host_label("101.blockhost.thawaras.org", domain), Some("101"));
-        assert_eq!(extract_host_label("ff.blockhost.thawaras.org", domain), Some("ff"));
-        assert_eq!(extract_host_label("blockhost.thawaras.org", domain), None);
+        let domain = "tunnel.example.org";
+        assert_eq!(extract_host_label("101.tunnel.example.org", domain), Some("101"));
+        assert_eq!(extract_host_label("ff.tunnel.example.org", domain), Some("ff"));
+        assert_eq!(extract_host_label("tunnel.example.org", domain), None);
         // Multi-level subdomain → rightmost label
-        assert_eq!(extract_host_label("a.b.blockhost.thawaras.org", domain), Some("b"));
-        assert_eq!(extract_host_label("foo.101.blockhost.thawaras.org", domain), Some("101"));
+        assert_eq!(extract_host_label("a.b.tunnel.example.org", domain), Some("b"));
+        assert_eq!(extract_host_label("foo.101.tunnel.example.org", domain), Some("101"));
         // Unrelated domain
         assert_eq!(extract_host_label("other.example.com", domain), None);
     }
@@ -490,7 +490,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("101.blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let query_bytes = build_test_query("101.tunnel.example.org", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -498,13 +498,13 @@ mod tests {
         assert!(response.has_flags(PacketFlag::AUTHORITATIVE_ANSWER));
         // RFC 1035: question section must be echoed
         assert_eq!(response.questions.len(), 1);
-        assert_eq!(response.questions[0].qname.to_string(), "101.blockhost.thawaras.org");
+        assert_eq!(response.questions[0].qname.to_string(), "101.tunnel.example.org");
         assert_eq!(response.answers.len(), 1);
 
         match &response.answers[0].rdata {
             RData::AAAA(aaaa) => {
                 let addr: Ipv6Addr = aaaa.address.into();
-                assert_eq!(addr, "2a11:6c7:f04:276::101".parse::<Ipv6Addr>().unwrap());
+                assert_eq!(addr, "2001:db8:1:2::101".parse::<Ipv6Addr>().unwrap());
             }
             _ => panic!("Expected AAAA record"),
         }
@@ -515,7 +515,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("xyz.blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let query_bytes = build_test_query("xyz.tunnel.example.org", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -529,7 +529,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("0.blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let query_bytes = build_test_query("0.tunnel.example.org", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -541,7 +541,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("blockhost.thawaras.org", simple_dns::TYPE::SOA);
+        let query_bytes = build_test_query("tunnel.example.org", simple_dns::TYPE::SOA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -549,8 +549,8 @@ mod tests {
         assert_eq!(response.answers.len(), 1);
         match &response.answers[0].rdata {
             RData::SOA(soa) => {
-                assert_eq!(soa.mname.to_string(), "ns1.blockhost.thawaras.org");
-                assert_eq!(soa.rname.to_string(), "hostmaster.blockhost.thawaras.org");
+                assert_eq!(soa.mname.to_string(), "ns1.tunnel.example.org");
+                assert_eq!(soa.rname.to_string(), "hostmaster.tunnel.example.org");
             }
             _ => panic!("Expected SOA record"),
         }
@@ -561,7 +561,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("blockhost.thawaras.org", simple_dns::TYPE::NS);
+        let query_bytes = build_test_query("tunnel.example.org", simple_dns::TYPE::NS);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(response.answers.len(), 1);
         match &response.answers[0].rdata {
             RData::NS(ns) => {
-                assert_eq!(ns.0.to_string(), "ns1.blockhost.thawaras.org");
+                assert_eq!(ns.0.to_string(), "ns1.tunnel.example.org");
             }
             _ => panic!("Expected NS record"),
         }
@@ -578,7 +578,7 @@ mod tests {
         match &response.additional_records[0].rdata {
             RData::A(a) => {
                 let addr: Ipv4Addr = a.address.into();
-                assert_eq!(addr, "95.179.128.177".parse::<Ipv4Addr>().unwrap());
+                assert_eq!(addr, "198.51.100.1".parse::<Ipv4Addr>().unwrap());
             }
             _ => panic!("Expected A glue record"),
         }
@@ -589,7 +589,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("ns1.blockhost.thawaras.org", simple_dns::TYPE::A);
+        let query_bytes = build_test_query("ns1.tunnel.example.org", simple_dns::TYPE::A);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -598,7 +598,7 @@ mod tests {
         match &response.answers[0].rdata {
             RData::A(a) => {
                 let addr: Ipv4Addr = a.address.into();
-                assert_eq!(addr, "95.179.128.177".parse::<Ipv4Addr>().unwrap());
+                assert_eq!(addr, "198.51.100.1".parse::<Ipv4Addr>().unwrap());
             }
             _ => panic!("Expected A record"),
         }
@@ -609,7 +609,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("ns1.blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let query_bytes = build_test_query("ns1.tunnel.example.org", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
@@ -622,7 +622,7 @@ mod tests {
         let config = test_config();
         let prefix = test_prefix();
 
-        let query_bytes = build_test_query("blockhost.thawaras.org", simple_dns::TYPE::AAAA);
+        let query_bytes = build_test_query("tunnel.example.org", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 
