@@ -50,7 +50,7 @@ build-deb/
 # Local notes that might contain sensitive info
 notes.md
 TODO.local.md
-scripts/__pycache__/
+__pycache__/
 
 # Claude session context (for continuity across compactions)
 SESSION_CONTEXT.md
