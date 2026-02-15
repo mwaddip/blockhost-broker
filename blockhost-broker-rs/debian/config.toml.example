@@ -69,5 +69,6 @@ poll_interval_ms = 5000
 # # Resolves <hex>.<domain> → <upstream_prefix>::<hex>
 # enabled = false
 # domain = "your.domain.example.com"
+# # extra_domains = ["other.domain.example.com"]
 # listen = "0.0.0.0:53"
 # ttl = 300

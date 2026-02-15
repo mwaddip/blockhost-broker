@@ -30,7 +30,7 @@ pub async fn run_dns_server(config: &DnsConfig, prefix: Ipv6Net) -> Result<()> {
         .await
         .with_context(|| format!("DNS: failed to bind TCP to {}", config.listen))?;
 
-    info!(listen = %config.listen, domain = %config.domain, prefix = %prefix, "DNS server started (UDP+TCP)");
+    info!(listen = %config.listen, domains = ?config.all_domains(), prefix = %prefix, "DNS server started (UDP+TCP)");
 
     let config_tcp = config.clone();
     tokio::spawn(async move {
@@ -131,16 +131,19 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
 
     let qname = question.qname.to_string();
     let qname_lower = qname.to_ascii_lowercase();
-    let domain_lower = config.domain.to_ascii_lowercase();
 
-    // Check if query is within our zone
-    let in_zone = qname_lower == domain_lower
-        || qname_lower.ends_with(&format!(".{}", domain_lower));
+    // Find which domain this query belongs to
+    let matched_domain = config.all_domains().into_iter().find(|d| {
+        let d_lower = d.to_ascii_lowercase();
+        qname_lower == d_lower || qname_lower.ends_with(&format!(".{}", d_lower))
+    });
 
-    if !in_zone {
-        return build_error_response(&query, RCODE::Refused);
-    }
+    let domain = match matched_domain {
+        Some(d) => d,
+        None => return build_error_response(&query, RCODE::Refused),
+    };
 
+    let domain_lower = domain.to_ascii_lowercase();
     let is_apex = qname_lower == domain_lower;
     let ns1_name = format!("ns1.{}", domain_lower);
     let is_ns1 = qname_lower == ns1_name;
@@ -148,37 +151,37 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
     match question.qtype {
         // SOA at apex
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::SOA) if is_apex => {
-            build_soa_response(&query, config)
+            build_soa_response(&query, domain, config)
         }
         // NS at apex
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::NS) if is_apex => {
-            build_ns_response(&query, config)
+            build_ns_response(&query, domain, config)
         }
         // A record for ns1.<domain>
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::A) if is_ns1 => {
-            build_ns1_a_response(&query, config)
+            build_ns1_a_response(&query, domain, config)
         }
         // AAAA — either apex (NODATA) or host lookup
         simple_dns::QTYPE::TYPE(simple_dns::TYPE::AAAA) => {
             if is_apex || is_ns1 {
-                build_nodata_response(&query, config)
+                build_nodata_response(&query, domain, config)
             } else {
-                build_aaaa_response(&query, question, config, prefix)
+                build_aaaa_response(&query, question, domain, config, prefix)
             }
         }
         // Any other type at apex → NODATA
-        _ if is_apex => build_nodata_response(&query, config),
+        _ if is_apex => build_nodata_response(&query, domain, config),
         // ns1 exists but no matching type → NODATA
-        _ if is_ns1 => build_nodata_response(&query, config),
+        _ if is_ns1 => build_nodata_response(&query, domain, config),
         // Any other type under zone → NODATA (name exists but no matching type)
         // unless the host label is invalid, in which case NXDOMAIN
         _ => {
             let host_label = extract_host_label(&qname_lower, &domain_lower);
             match host_label {
                 Some(label) if parse_host_hex(label).is_some() => {
-                    build_nodata_response(&query, config)
+                    build_nodata_response(&query, domain, config)
                 }
-                _ => build_nxdomain_response(&query, config),
+                _ => build_nxdomain_response(&query, domain, config),
             }
         }
     }
@@ -258,26 +261,27 @@ fn new_response(query: &Packet, rcode: RCODE) -> Packet<'static> {
 fn build_aaaa_response(
     query: &Packet,
     question: &Question,
+    domain: &str,
     config: &DnsConfig,
     prefix: Ipv6Net,
 ) -> Result<Vec<u8>> {
     let qname = question.qname.to_string();
     let qname_lower = qname.to_ascii_lowercase();
-    let domain_lower = config.domain.to_ascii_lowercase();
+    let domain_lower = domain.to_ascii_lowercase();
 
     let host_label = match extract_host_label(&qname_lower, &domain_lower) {
         Some(l) => l,
-        None => return build_nxdomain_response(query, config),
+        None => return build_nxdomain_response(query, domain, config),
     };
 
     let host_value = match parse_host_hex(host_label) {
         Some(v) => v,
-        None => return build_nxdomain_response(query, config),
+        None => return build_nxdomain_response(query, domain, config),
     };
 
     let addr = match resolve_host(prefix, host_value) {
         Some(a) => a,
-        None => return build_nxdomain_response(query, config),
+        None => return build_nxdomain_response(query, domain, config),
     };
 
     let mut response = new_response(query, RCODE::NoError);
@@ -291,11 +295,11 @@ fn build_aaaa_response(
 }
 
 /// Build an SOA response.
-fn build_soa_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+fn build_soa_response(query: &Packet, domain: &str, config: &DnsConfig) -> Result<Vec<u8>> {
     let mut response = new_response(query, RCODE::NoError);
 
-    let name = Name::new_unchecked(&config.domain);
-    let soa = make_soa(config)?;
+    let name = Name::new_unchecked(domain);
+    let soa = make_soa(domain)?;
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::SOA(soa));
     response.answers.push(rr);
 
@@ -303,11 +307,11 @@ fn build_soa_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
 }
 
 /// Build an NS response with optional glue A record.
-fn build_ns_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+fn build_ns_response(query: &Packet, domain: &str, config: &DnsConfig) -> Result<Vec<u8>> {
     let mut response = new_response(query, RCODE::NoError);
 
-    let name = Name::new_unchecked(&config.domain);
-    let ns_name = format!("ns1.{}", config.domain);
+    let name = Name::new_unchecked(domain);
+    let ns_name = format!("ns1.{}", domain);
     let ns = NS(Name::new_unchecked(&ns_name));
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::NS(ns));
     response.answers.push(rr);
@@ -323,14 +327,14 @@ fn build_ns_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
 }
 
 /// Build an A response for ns1.<domain>.
-fn build_ns1_a_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+fn build_ns1_a_response(query: &Packet, domain: &str, config: &DnsConfig) -> Result<Vec<u8>> {
     let addr = match parse_ns_ipv4(config) {
         Some(a) => a,
-        None => return build_nodata_response(query, config),
+        None => return build_nodata_response(query, domain, config),
     };
 
     let mut response = new_response(query, RCODE::NoError);
-    let ns_name = format!("ns1.{}", config.domain);
+    let ns_name = format!("ns1.{}", domain);
     let name = Name::new_unchecked(&ns_name);
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::A(A { address: addr.into() }));
     response.answers.push(rr);
@@ -344,11 +348,11 @@ fn parse_ns_ipv4(config: &DnsConfig) -> Option<Ipv4Addr> {
 }
 
 /// Build a NODATA response (name exists, no matching type): empty answer + SOA in authority.
-fn build_nodata_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+fn build_nodata_response(query: &Packet, domain: &str, config: &DnsConfig) -> Result<Vec<u8>> {
     let mut response = new_response(query, RCODE::NoError);
 
-    let name = Name::new_unchecked(&config.domain);
-    let soa = make_soa(config)?;
+    let name = Name::new_unchecked(domain);
+    let soa = make_soa(domain)?;
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::SOA(soa));
     response.name_servers.push(rr);
 
@@ -356,11 +360,11 @@ fn build_nodata_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> 
 }
 
 /// Build an NXDOMAIN response with SOA in authority section.
-fn build_nxdomain_response(query: &Packet, config: &DnsConfig) -> Result<Vec<u8>> {
+fn build_nxdomain_response(query: &Packet, domain: &str, config: &DnsConfig) -> Result<Vec<u8>> {
     let mut response = new_response(query, RCODE::NameError);
 
-    let name = Name::new_unchecked(&config.domain);
-    let soa = make_soa(config)?;
+    let name = Name::new_unchecked(domain);
+    let soa = make_soa(domain)?;
     let rr = ResourceRecord::new(name, simple_dns::CLASS::IN, config.ttl, RData::SOA(soa));
     response.name_servers.push(rr);
 
@@ -378,10 +382,10 @@ fn build_error_response(query: &Packet, rcode: RCODE) -> Result<Vec<u8>> {
     Ok(response.build_bytes_vec_compressed()?)
 }
 
-/// Build the SOA record data. Derived from the configured domain.
-fn make_soa(config: &DnsConfig) -> Result<SOA<'static>> {
-    let mname = format!("ns1.{}", config.domain);
-    let rname = format!("hostmaster.{}", config.domain);
+/// Build the SOA record data. Derived from the matched domain.
+fn make_soa(domain: &str) -> Result<SOA<'static>> {
+    let mname = format!("ns1.{}", domain);
+    let rname = format!("hostmaster.{}", domain);
     Ok(SOA {
         mname: Name::new_unchecked(&mname).into_owned(),
         rname: Name::new_unchecked(&rname).into_owned(),
@@ -408,6 +412,14 @@ mod tests {
             listen: "0.0.0.0:53".to_string(),
             ttl: 300,
             ns_ipv4: Some("198.51.100.1".to_string()),
+            extra_domains: vec![],
+        }
+    }
+
+    fn test_config_multi() -> DnsConfig {
+        DnsConfig {
+            extra_domains: vec!["vm.example.io".to_string()],
+            ..test_config()
         }
     }
 
@@ -637,6 +649,93 @@ mod tests {
         let prefix = test_prefix();
 
         let query_bytes = build_test_query("example.com", simple_dns::TYPE::AAAA);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::Refused);
+    }
+
+    // --- Multi-domain tests ---
+
+    #[test]
+    fn test_extra_domain_aaaa() {
+        let config = test_config_multi();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("101.vm.example.io", simple_dns::TYPE::AAAA);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        assert_eq!(response.answers.len(), 1);
+        match &response.answers[0].rdata {
+            RData::AAAA(aaaa) => {
+                let addr: Ipv6Addr = aaaa.address.into();
+                // Same address as primary domain
+                assert_eq!(addr, "2001:db8:1:2::101".parse::<Ipv6Addr>().unwrap());
+            }
+            _ => panic!("Expected AAAA record"),
+        }
+    }
+
+    #[test]
+    fn test_extra_domain_soa() {
+        let config = test_config_multi();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("vm.example.io", simple_dns::TYPE::SOA);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        assert_eq!(response.answers.len(), 1);
+        match &response.answers[0].rdata {
+            RData::SOA(soa) => {
+                assert_eq!(soa.mname.to_string(), "ns1.vm.example.io");
+                assert_eq!(soa.rname.to_string(), "hostmaster.vm.example.io");
+            }
+            _ => panic!("Expected SOA record"),
+        }
+    }
+
+    #[test]
+    fn test_extra_domain_ns() {
+        let config = test_config_multi();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("vm.example.io", simple_dns::TYPE::NS);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        match &response.answers[0].rdata {
+            RData::NS(ns) => {
+                assert_eq!(ns.0.to_string(), "ns1.vm.example.io");
+            }
+            _ => panic!("Expected NS record"),
+        }
+    }
+
+    #[test]
+    fn test_primary_still_works_with_extra() {
+        let config = test_config_multi();
+        let prefix = test_prefix();
+
+        // Primary domain still resolves
+        let query_bytes = build_test_query("101.tunnel.example.org", simple_dns::TYPE::AAAA);
+        let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
+        let response = Packet::parse(&response_bytes).unwrap();
+
+        assert_eq!(response.rcode(), RCODE::NoError);
+        assert_eq!(response.answers.len(), 1);
+    }
+
+    #[test]
+    fn test_unrelated_domain_refused_with_extra() {
+        let config = test_config_multi();
+        let prefix = test_prefix();
+
+        let query_bytes = build_test_query("other.example.com", simple_dns::TYPE::AAAA);
         let response_bytes = handle_query(&query_bytes, &config, prefix).unwrap();
         let response = Packet::parse(&response_bytes).unwrap();
 

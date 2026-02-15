@@ -240,6 +240,10 @@ pub struct DnsConfig {
     /// IPv4 address for ns1.<domain> glue record (e.g. "95.179.128.177").
     #[serde(default)]
     pub ns_ipv4: Option<String>,
+
+    /// Additional domains to serve (same synthesized records as the primary domain).
+    #[serde(default)]
+    pub extra_domains: Vec<String>,
 }
 
 impl Default for DnsConfig {
@@ -250,11 +254,21 @@ impl Default for DnsConfig {
             listen: "0.0.0.0:53".to_string(),
             ttl: 300,
             ns_ipv4: None,
+            extra_domains: Vec::new(),
         }
     }
 }
 
 impl DnsConfig {
+    /// All domains this server is authoritative for (primary + extras).
+    pub fn all_domains(&self) -> Vec<&str> {
+        let mut domains = vec![self.domain.as_str()];
+        for d in &self.extra_domains {
+            domains.push(d.as_str());
+        }
+        domains
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.enabled && self.domain.is_empty() {
             return Err(ConfigError::ValidationError(
@@ -265,6 +279,18 @@ impl DnsConfig {
             return Err(ConfigError::ValidationError(
                 "dns.domain must not end with a trailing dot".to_string(),
             ));
+        }
+        for (i, d) in self.extra_domains.iter().enumerate() {
+            if d.is_empty() {
+                return Err(ConfigError::ValidationError(
+                    format!("dns.extra_domains[{}] must not be empty", i),
+                ));
+            }
+            if d.ends_with('.') {
+                return Err(ConfigError::ValidationError(
+                    format!("dns.extra_domains[{}] must not end with a trailing dot", i),
+                ));
+            }
         }
         Ok(())
     }
