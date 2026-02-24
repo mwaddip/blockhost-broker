@@ -2,6 +2,8 @@
 //!
 //! Uses lazy polling to check for new requests instead of unbounded loops.
 //! Supports a primary contract and optional legacy contracts.
+//! Responses are delivered as direct blockchain transactions to the requester,
+//! not stored on-chain.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +21,7 @@ use crate::crypto::{EciesEncryption, RequestPayload, ResponsePayload};
 use crate::db::Ipam;
 use crate::wg::WireGuardManager;
 
-use super::contracts::{BrokerRequestsContract, RequestData, RequestStatus};
+use super::contracts::BrokerRequestsContract;
 use super::verifier::NftVerifier;
 
 #[derive(Debug, Error)]
@@ -81,6 +83,7 @@ pub struct OnchainMonitor {
     wg: Arc<WireGuardManager>,
     provider: Provider<Http>,
     wallet: LocalWallet,
+    client: Arc<SignerMiddleware>,
     encryption: EciesEncryption,
     verifier: NftVerifier,
     primary_contract: BrokerRequestsContract<SignerMiddleware>,
@@ -187,6 +190,7 @@ impl OnchainMonitor {
             wg,
             provider,
             wallet,
+            client,
             encryption,
             verifier,
             primary_contract,
@@ -208,14 +212,6 @@ impl OnchainMonitor {
             poll_interval_ms = %self.onchain_config.poll_interval_ms,
             "Starting on-chain monitor"
         );
-
-        // Sync on-chain capacity with config
-        self.sync_capacity().await;
-
-        // Sync test contract capacity
-        if let Some((addr, contract)) = &self.test_contract {
-            self.sync_capacity_for_contract(contract, addr).await;
-        }
 
         let poll_interval = Duration::from_millis(self.onchain_config.poll_interval_ms);
 
@@ -261,100 +257,6 @@ impl OnchainMonitor {
         let _ = self.shutdown_tx.send(true);
     }
 
-    /// Sync on-chain totalCapacity with config max_allocations (if explicitly set).
-    /// If max_allocations is not configured, sets totalCapacity to 0 (unlimited).
-    async fn sync_capacity(&self) {
-        let desired = self.broker_config.max_allocations.unwrap_or(0);
-        let on_chain = match self.primary_contract.total_capacity().call().await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "Failed to read on-chain totalCapacity");
-                return;
-            }
-        };
-
-        let on_chain_u64 = on_chain.as_u64();
-        if on_chain_u64 == desired {
-            return;
-        }
-
-        info!(
-            on_chain = on_chain_u64,
-            desired = desired,
-            "Syncing on-chain totalCapacity with config"
-        );
-
-        let call = self.primary_contract.set_total_capacity(U256::from(desired));
-        let pending_tx = match call.send().await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(error = %e, "Failed to send setTotalCapacity transaction");
-                return;
-            }
-        };
-
-        match pending_tx.await {
-            Ok(Some(receipt)) if receipt.status == Some(1.into()) => {
-                info!("On-chain totalCapacity updated to {}", desired);
-            }
-            Ok(_) => {
-                warn!("setTotalCapacity transaction failed or no receipt");
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to confirm setTotalCapacity");
-            }
-        }
-    }
-
-    /// Sync capacity for a specific contract (used for test contract).
-    async fn sync_capacity_for_contract(
-        &self,
-        contract: &BrokerRequestsContract<SignerMiddleware>,
-        contract_address: &str,
-    ) {
-        let desired = self.broker_config.max_allocations.unwrap_or(0);
-        let on_chain = match contract.total_capacity().call().await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(contract = contract_address, error = %e, "Failed to read on-chain totalCapacity for test contract");
-                return;
-            }
-        };
-
-        let on_chain_u64 = on_chain.as_u64();
-        if on_chain_u64 == desired {
-            return;
-        }
-
-        info!(
-            contract = contract_address,
-            on_chain = on_chain_u64,
-            desired = desired,
-            "Syncing on-chain totalCapacity for test contract"
-        );
-
-        let call = contract.set_total_capacity(U256::from(desired));
-        let pending_tx = match call.send().await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(contract = contract_address, error = %e, "Failed to send setTotalCapacity for test contract");
-                return;
-            }
-        };
-
-        match pending_tx.await {
-            Ok(Some(receipt)) if receipt.status == Some(1.into()) => {
-                info!(contract = contract_address, "Test contract totalCapacity updated to {}", desired);
-            }
-            Ok(_) => {
-                warn!(contract = contract_address, "setTotalCapacity transaction failed for test contract");
-            }
-            Err(e) => {
-                warn!(contract = contract_address, error = %e, "Failed to confirm setTotalCapacity for test contract");
-            }
-        }
-    }
-
     /// Check if a contract address is the test contract.
     fn is_test_contract(&self, contract_address: &str) -> bool {
         self.test_contract
@@ -391,15 +293,6 @@ impl OnchainMonitor {
                 }
             };
 
-            // Use the test contract for on-chain release
-            let contract = match &self.test_contract {
-                Some((_, c)) => c,
-                None => {
-                    error!("Test contract not configured but test allocation found");
-                    continue;
-                }
-            };
-
             info!(
                 prefix = %allocation.prefix,
                 nft_contract = %allocation.nft_contract,
@@ -412,7 +305,7 @@ impl OnchainMonitor {
             });
 
             if let Err(e) = self
-                .release_allocation(nft_contract, &allocation.prefix.to_string(), &allocation.pubkey, contract)
+                .release_allocation(nft_contract, &allocation.prefix.to_string(), &allocation.pubkey)
                 .await
             {
                 error!(
@@ -456,7 +349,10 @@ impl OnchainMonitor {
             "Checking for new requests"
         );
 
-        // Process new requests
+        // Deduplicate: for the same NFT contract, only process the latest request.
+        // Collect all new requests first, then keep only the last per NFT.
+        let mut new_requests: Vec<PendingRequest> = Vec::new();
+
         for id in (last_processed + 1)..=count {
             let request = contract
                 .get_request(U256::from(id))
@@ -464,29 +360,39 @@ impl OnchainMonitor {
                 .await
                 .map_err(|e| MonitorError::Contract(e.to_string()))?;
 
-            let status = RequestStatus::from(request.status);
-
-            if status.is_pending() {
-                let pending = PendingRequest {
-                    id,
-                    requester: request.requester,
-                    nft_contract: request.nft_contract,
-                    encrypted_payload: request.encrypted_payload,
-                    submitted_at: Utc.timestamp_opt(request.submitted_at.as_u64() as i64, 0)
-                        .single()
-                        .unwrap_or_else(Utc::now),
-                };
-
-                if let Err(e) = self.process_request(pending, contract, contract_address).await {
-                    // Silent rejection - just log and continue
-                    warn!(request_id = id, contract = contract_address, error = %e, "Request processing failed (silent rejection)");
-                }
-            }
-
-            // Update last processed ID (per-contract)
-            let ipam = self.ipam.lock().await;
-            ipam.set_last_processed_id_for_contract(contract_address, id).await?;
+            new_requests.push(PendingRequest {
+                id,
+                requester: request.requester,
+                nft_contract: request.nft_contract,
+                encrypted_payload: request.encrypted_payload,
+                submitted_at: Utc.timestamp_opt(request.submitted_at.as_u64() as i64, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+            });
         }
+
+        // Deduplicate: keep only the latest request per NFT contract
+        let mut latest_per_nft: std::collections::HashMap<Address, PendingRequest> =
+            std::collections::HashMap::new();
+        for req in new_requests {
+            latest_per_nft.insert(req.nft_contract, req);
+        }
+
+        // Process deduplicated requests
+        for (_, pending) in latest_per_nft {
+            if let Err(e) = self.process_request(pending.clone(), contract_address).await {
+                warn!(
+                    request_id = pending.id,
+                    contract = contract_address,
+                    error = %e,
+                    "Request processing failed (silent rejection)"
+                );
+            }
+        }
+
+        // Update last processed ID to the latest we've seen
+        let ipam = self.ipam.lock().await;
+        ipam.set_last_processed_id_for_contract(contract_address, count).await?;
 
         Ok(())
     }
@@ -495,7 +401,6 @@ impl OnchainMonitor {
     async fn process_request(
         &mut self,
         request: PendingRequest,
-        contract: &BrokerRequestsContract<SignerMiddleware>,
         contract_address: &str,
     ) -> Result<(), MonitorError> {
         info!(
@@ -518,7 +423,6 @@ impl OnchainMonitor {
                 error = ?verification.error,
                 "Request verification failed"
             );
-            // Silent rejection - don't submit response, let it expire
             return Ok(());
         }
 
@@ -562,7 +466,7 @@ impl OnchainMonitor {
                 return Err(e.into());
             }
 
-            // Remove stale pending_verification for the old pubkey (fix 5e)
+            // Remove stale pending_verification for the old pubkey
             self.pending_verifications.retain(|pv| {
                 let same_nft = pv.nft_contract == request.nft_contract;
                 if same_nft {
@@ -659,13 +563,12 @@ impl OnchainMonitor {
             }
         };
 
-        // Submit approval on-chain
-        if let Err(e) = self.submit_approval(request.id, encrypted_response, contract).await {
-            // Rollback IPAM + WG on failed on-chain submission
+        // Send response as direct transaction to requester
+        if let Err(e) = self.send_response(request.id, request.requester, encrypted_response).await {
             error!(
                 request_id = request.id,
                 error = %e,
-                "Failed to submit approval on-chain, rolling back allocation"
+                "Failed to send response transaction, rolling back allocation"
             );
             self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
             return Err(e);
@@ -698,31 +601,36 @@ impl OnchainMonitor {
         let _ = ipam.release(prefix, nft_contract).await;
     }
 
-    /// Submit an approval response on-chain.
+    /// Send an encrypted response as a direct transaction to the requester.
     ///
     /// Prepends the request ID as an 8-byte big-endian prefix before the encrypted
     /// payload so the client can identify stale responses without attempting decryption.
-    async fn submit_approval(
+    async fn send_response(
         &self,
         request_id: u64,
+        requester: Address,
         encrypted_payload: Vec<u8>,
-        contract: &BrokerRequestsContract<SignerMiddleware>,
     ) -> Result<(), MonitorError> {
         let mut prefixed_payload = Vec::with_capacity(8 + encrypted_payload.len());
         prefixed_payload.extend_from_slice(&request_id.to_be_bytes());
         prefixed_payload.extend(encrypted_payload);
 
-        let tx = contract.submit_response(
-            U256::from(request_id),
-            Bytes::from(prefixed_payload),
-        );
+        let tx = TransactionRequest::new()
+            .to(requester)
+            .value(0)
+            .data(prefixed_payload);
 
-        let pending_tx = tx.send().await.map_err(|e| MonitorError::Contract(e.to_string()))?;
+        let pending_tx = self
+            .client
+            .send_transaction(tx, None)
+            .await
+            .map_err(|e| MonitorError::Contract(e.to_string()))?;
 
         info!(
             request_id = request_id,
+            requester = %requester,
             tx_hash = %pending_tx.tx_hash(),
-            "Submitted approval transaction"
+            "Sent response transaction"
         );
 
         // Wait for confirmation
@@ -735,7 +643,7 @@ impl OnchainMonitor {
                 info!(
                     request_id = request_id,
                     tx_hash = %r.transaction_hash,
-                    "Approval confirmed"
+                    "Response confirmed"
                 );
                 Ok(())
             }
@@ -743,7 +651,7 @@ impl OnchainMonitor {
                 error!(
                     request_id = request_id,
                     tx_hash = %r.transaction_hash,
-                    "Approval transaction failed"
+                    "Response transaction failed"
                 );
                 Err(MonitorError::Contract("Transaction failed".to_string()))
             }
@@ -804,10 +712,8 @@ impl OnchainMonitor {
         self.pending_verifications = to_keep;
 
         for pv in to_release {
-            // Resolve which contract to release on
-            let contract = self.resolve_contract(&pv.contract_address);
             if let Err(e) = self
-                .release_allocation(pv.nft_contract, &pv.prefix, &pv.pubkey, contract)
+                .release_allocation(pv.nft_contract, &pv.prefix, &pv.pubkey)
                 .await
             {
                 error!(
@@ -820,32 +726,12 @@ impl OnchainMonitor {
         }
     }
 
-    /// Resolve a contract reference by address string.
-    fn resolve_contract(&self, contract_address: &str) -> &BrokerRequestsContract<SignerMiddleware> {
-        if contract_address == self.primary_address {
-            return &self.primary_contract;
-        }
-        for (addr, contract) in &self.legacy_contracts {
-            if addr == contract_address {
-                return contract;
-            }
-        }
-        if let Some((addr, contract)) = &self.test_contract {
-            if addr == contract_address {
-                return contract;
-            }
-        }
-        // Fallback to primary (shouldn't happen)
-        &self.primary_contract
-    }
-
-    /// Release an allocation.
+    /// Release an allocation (WireGuard peer + IPAM only, no on-chain call).
     pub async fn release_allocation(
         &self,
         nft_contract: Address,
         prefix: &str,
         pubkey: &str,
-        contract: &BrokerRequestsContract<SignerMiddleware>,
     ) -> Result<(), MonitorError> {
         // Remove WireGuard peer
         let _ = self.wg.remove_peer(pubkey);
@@ -853,32 +739,13 @@ impl OnchainMonitor {
         // Release from IPAM
         let ipam = self.ipam.lock().await;
         let _ = ipam.release(prefix, &format!("{:?}", nft_contract).to_lowercase()).await;
-        drop(ipam);
-
-        // Release on-chain
-        let tx = contract.release_allocation(nft_contract);
-        let pending_tx = tx.send().await.map_err(|e| MonitorError::Contract(e.to_string()))?;
 
         info!(
             nft_contract = %nft_contract,
-            tx_hash = %pending_tx.tx_hash(),
-            "Submitted release transaction"
+            prefix = prefix,
+            "Allocation released"
         );
 
-        let receipt = pending_tx
-            .await
-            .map_err(|e| MonitorError::Contract(e.to_string()))?;
-
-        match receipt {
-            Some(r) if r.status == Some(1.into()) => {
-                info!(
-                    nft_contract = %nft_contract,
-                    tx_hash = %r.transaction_hash,
-                    "Release confirmed"
-                );
-                Ok(())
-            }
-            _ => Err(MonitorError::Contract("Release transaction failed".to_string())),
-        }
+        Ok(())
     }
 }

@@ -15,8 +15,6 @@ contract BrokerRegistry is Ownable {
         bytes encryptionPubkey;     // secp256k1 pubkey for ECIES encryption (65 bytes uncompressed)
         string region;              // Geographic hint (e.g., "eu-west", "us-east")
         bool active;                // Accepting new requests
-        uint256 capacity;           // Maximum allocations (0 = unlimited)
-        uint256 currentLoad;        // Current number of allocations
         uint256 registeredAt;       // Registration timestamp
     }
 
@@ -39,7 +37,6 @@ contract BrokerRegistry is Ownable {
     event BrokerUpdated(uint256 indexed brokerId, address indexed operator);
     event BrokerDeactivated(uint256 indexed brokerId, address indexed operator);
     event BrokerActivated(uint256 indexed brokerId, address indexed operator);
-    event BrokerLoadUpdated(uint256 indexed brokerId, uint256 currentLoad);
 
     constructor() Ownable(msg.sender) {}
 
@@ -57,15 +54,13 @@ contract BrokerRegistry is Ownable {
      * @param requestsContract Address of the broker's BrokerRequests contract
      * @param encryptionPubkey secp256k1 public key for ECIES encryption (65 bytes)
      * @param region Geographic region hint
-     * @param capacity Maximum allocations (0 = unlimited)
      * @return brokerId The ID of the newly registered broker
      */
     function registerBroker(
         address operator,
         address requestsContract,
         bytes calldata encryptionPubkey,
-        string calldata region,
-        uint256 capacity
+        string calldata region
     ) external onlyOwner returns (uint256 brokerId) {
         require(operator != address(0), "Invalid operator address");
         require(requestsContract != address(0), "Invalid requests contract");
@@ -87,8 +82,6 @@ contract BrokerRegistry is Ownable {
             encryptionPubkey: encryptionPubkey,
             region: region,
             active: true,
-            capacity: capacity,
-            currentLoad: 0,
             registeredAt: block.timestamp
         }));
 
@@ -121,30 +114,6 @@ contract BrokerRegistry is Ownable {
 
         brokers[brokerId - 1].region = region;
         emit BrokerUpdated(brokerId, msg.sender);
-    }
-
-    /**
-     * @notice Update broker capacity
-     * @param capacity New capacity (0 = unlimited)
-     */
-    function updateCapacity(uint256 capacity) external {
-        uint256 brokerId = _requireOperator();
-
-        brokers[brokerId - 1].capacity = capacity;
-        emit BrokerUpdated(brokerId, msg.sender);
-    }
-
-    /**
-     * @notice Update current load (called by broker when allocations change)
-     * @param currentLoad New current load value
-     */
-    function updateLoad(uint256 currentLoad) external {
-        uint256 brokerId = _requireOperator();
-        uint256 cap = brokers[brokerId - 1].capacity;
-        require(cap == 0 || currentLoad <= cap, "Load exceeds capacity");
-
-        brokers[brokerId - 1].currentLoad = currentLoad;
-        emit BrokerLoadUpdated(brokerId, currentLoad);
     }
 
     /**

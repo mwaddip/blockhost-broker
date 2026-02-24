@@ -201,7 +201,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const result = await response.json();
 
             if (response.ok && result.success) {
-                showToast(`Lease released successfully. TX: ${result.tx_hash.slice(0, 10)}...`, 'success');
+                showToast(result.message || 'Lease released successfully', 'success');
                 // Remove row from table
                 const row = document.querySelector(`tr[data-lease-id="${leaseId}"]`);
                 if (row) {

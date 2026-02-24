@@ -84,7 +84,6 @@ def get_broker_manager() -> BrokerManager:
             operator_key_path=Path(
                 onchain.get("private_key_file", BROKER_CONFIG_DIR / "operator.key")
             ),
-            requests_contract=onchain.get("requests_contract", ""),
             rpc_url=onchain.get("rpc_url", "https://ethereum-sepolia-rpc.publicnode.com"),
             chain_id=onchain.get("chain_id", 11155111),
             wg_interface=broker_config.get("wireguard", {}).get("interface", "wg-broker"),
