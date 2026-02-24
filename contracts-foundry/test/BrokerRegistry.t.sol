@@ -23,7 +23,7 @@ contract BrokerRegistryTest is Test {
     // ========== Registration ==========
 
     function test_registerBroker() public {
-        uint256 id = registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        uint256 id = registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
         assertEq(id, 1);
         assertEq(registry.operatorToBrokerId(operator), 1);
         assertEq(registry.requestsContractToBrokerId(requestsContract), 1);
@@ -32,28 +32,28 @@ contract BrokerRegistryTest is Test {
 
     function test_registerBroker_revertZeroOperator() public {
         vm.expectRevert("Invalid operator address");
-        registry.registerBroker(address(0), requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(address(0), requestsContract, VALID_PUBKEY, "eu-west");
     }
 
     function test_registerBroker_revertZeroContract() public {
         vm.expectRevert("Invalid requests contract");
-        registry.registerBroker(operator, address(0), VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, address(0), VALID_PUBKEY, "eu-west");
     }
 
     function test_registerBroker_revertBadPubkey() public {
         vm.expectRevert("Pubkey must be 65 bytes (uncompressed secp256k1)");
-        registry.registerBroker(operator, requestsContract, hex"aabb", "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, hex"aabb", "eu-west");
     }
 
     function test_registerBroker_reRegistration() public {
         // First registration
-        uint256 id1 = registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        uint256 id1 = registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
         assertEq(id1, 1);
         assertTrue(registry.getBroker(1).active);
 
         // Re-register same operator with new requests contract
         address newRequestsContract = makeAddr("requests2");
-        uint256 id2 = registry.registerBroker(operator, newRequestsContract, VALID_PUBKEY, "us-east", 200);
+        uint256 id2 = registry.registerBroker(operator, newRequestsContract, VALID_PUBKEY, "us-east");
         assertEq(id2, 2);
 
         // Old entry should be deactivated
@@ -62,7 +62,6 @@ contract BrokerRegistryTest is Test {
         // New entry should be active
         assertTrue(registry.getBroker(2).active);
         assertEq(registry.getBroker(2).region, "us-east");
-        assertEq(registry.getBroker(2).capacity, 200);
 
         // Operator mapping should point to new entry
         assertEq(registry.operatorToBrokerId(operator), 2);
@@ -80,13 +79,13 @@ contract BrokerRegistryTest is Test {
     function test_registerBroker_revertNonOwner() public {
         vm.prank(operator);
         vm.expectRevert();
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
     }
 
     // ========== Updates ==========
 
     function test_updateEncryptionPubkey() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
 
         bytes memory newPubkey = hex"04ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
         vm.prank(operator);
@@ -97,7 +96,7 @@ contract BrokerRegistryTest is Test {
     }
 
     function test_updateRegion() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
 
         vm.prank(operator);
         registry.updateRegion("us-east");
@@ -107,46 +106,17 @@ contract BrokerRegistryTest is Test {
     }
 
     function test_updateRegion_revertEmpty() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
 
         vm.prank(operator);
         vm.expectRevert("Region cannot be empty");
         registry.updateRegion("");
     }
 
-    function test_updateLoad() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
-
-        vm.prank(operator);
-        registry.updateLoad(50);
-
-        BrokerRegistry.Broker memory broker = registry.getBroker(1);
-        assertEq(broker.currentLoad, 50);
-    }
-
-    function test_updateLoad_revertExceedsCapacity() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
-
-        vm.prank(operator);
-        vm.expectRevert("Load exceeds capacity");
-        registry.updateLoad(101);
-    }
-
-    function test_updateLoad_unlimitedCapacity() public {
-        // capacity = 0 means unlimited
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 0);
-
-        vm.prank(operator);
-        registry.updateLoad(999999);
-
-        BrokerRegistry.Broker memory broker = registry.getBroker(1);
-        assertEq(broker.currentLoad, 999999);
-    }
-
     // ========== Activation ==========
 
     function test_deactivateAndActivate() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
 
         vm.prank(operator);
         registry.deactivate();
@@ -160,7 +130,7 @@ contract BrokerRegistryTest is Test {
     // ========== Removal ==========
 
     function test_removeBroker() public {
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
         registry.removeBroker(1);
 
         assertFalse(registry.getBroker(1).active);
@@ -177,7 +147,7 @@ contract BrokerRegistryTest is Test {
 
     function test_isOperator() public {
         assertFalse(registry.isOperator(operator));
-        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west", 100);
+        registry.registerBroker(operator, requestsContract, VALID_PUBKEY, "eu-west");
         assertTrue(registry.isOperator(operator));
     }
 }

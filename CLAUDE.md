@@ -23,19 +23,15 @@ Environment variables should be in `~/projects/sharedenv/blockhost.env` (not com
 
 ## Deployed Contracts (Sepolia Testnet)
 
-**Currently Active (V2):**
-- **BrokerRegistry**: `0x4e020bf35a1b2939E359892D22d96B4A2DAEb93e`
-- **BrokerRequests**: `0xDE6f2cBB6de279e9f95Cd07B18411d26FEa51546`
-
-**Legacy (V1 — still monitored by broker):**
-- **BrokerRegistry**: `0x0E5b567E7d5C5c36D8fD70DE8129c35B473d0Aaf`
-- **BrokerRequests**: `0xCD75c00dBB3F05cF27f16699591f4256a798e694`
+**Currently Active (V3):**
+- **BrokerRegistry**: `0x5F779652623c85343c5914d9E07FADCbD9Aa1f2e`
+- **BrokerRequests**: `0x145EBeA3830b4eCF3C06E0ccde9Ec5dd89dfE50e`
 
 **Test (CI — allocations auto-expire in 24h):**
-- **BrokerRegistry**: `0x2C454Add607817c292f02DE37074c7Fb5F5BfCD8`
-- **BrokerRequests**: `0x91cABa74E1e3005074bDF882BBf59c7CbC61a410`
+- **BrokerRegistry**: `0x26b9baa877628801535F5Af08548e3EC7D3ceb39`
+- **BrokerRequests**: `0x70f0eAe36fB4d2FdDEf42b89c734a865D317B8B4`
 
-V2 adds overwrite-on-duplicate, capacity tracking, and re-registration support. Deployed via `contracts-foundry/script/DeployV2.s.sol`.
+V3: minimal contracts — responses delivered via direct ETH tx (not stored on-chain), release is local-only, capacity tracked by uint8 status flag. Deployed via `contracts-foundry/script/DeployV2.s.sol` (DeployV3 contract).
 
 Registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry.json
 Test registry config fetched from: https://raw.githubusercontent.com/mwaddip/blockhost-broker/main/registry-testnet.json
@@ -98,13 +94,6 @@ Common breaking changes to watch for:
 - Contract function signature changes
 - Struct return types (must use tuple format in ABI)
 - New/removed status codes
-
-V2 contract additions (must be present in both Rust ABI JSON and Python client ABI):
-- `getAvailableCapacity()`, `totalCapacity()`, `_activeCount()`, `_pendingCount()`, `setTotalCapacity(uint256)`
-
-The broker config supports `legacy_requests_contracts` — a list of old BrokerRequests addresses that the broker continues to monitor (read-only polling, no new approvals). This keeps existing allocations visible during migration.
-
-The broker config supports `test_requests_contract` — a single BrokerRequests address used for CI/integration testing. Allocations from this contract are tagged `is_test=1` and auto-expire after 24 hours.
 
 ## Project Structure
 
