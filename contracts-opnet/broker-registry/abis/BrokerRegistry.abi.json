@@ -1,0 +1,312 @@
+{
+    "functions": [
+        {
+            "name": "registerBroker",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "requestsContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "encryptionPubkey",
+                    "type": "STRING"
+                },
+                {
+                    "name": "region",
+                    "type": "STRING"
+                },
+                {
+                    "name": "capacity",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "updateEncryptionPubkey",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "encryptionPubkey",
+                    "type": "STRING"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "updateRegion",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "region",
+                    "type": "STRING"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "updateCapacity",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "capacity",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "updateLoad",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "currentLoad",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "deactivate",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [],
+            "outputs": []
+        },
+        {
+            "name": "activate",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [],
+            "outputs": []
+        },
+        {
+            "name": "removeBroker",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "getBroker",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "requestsContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "encryptionPubkey",
+                    "type": "STRING"
+                },
+                {
+                    "name": "region",
+                    "type": "STRING"
+                },
+                {
+                    "name": "active",
+                    "type": "BOOL"
+                },
+                {
+                    "name": "capacity",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "currentLoad",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "registeredAt",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "getBrokerCount",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "count",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "isOperator",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "isRegistered",
+                    "type": "BOOL"
+                }
+            ]
+        },
+        {
+            "name": "getBrokerIdByOperator",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "getBrokerIdByRequestsContract",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "requestsContract",
+                    "type": "ADDRESS"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                }
+            ]
+        }
+    ],
+    "events": [
+        {
+            "name": "BrokerRegistered",
+            "values": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "requestsContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "region",
+                    "type": "STRING"
+                }
+            ],
+            "type": "Event"
+        },
+        {
+            "name": "BrokerUpdated",
+            "values": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                }
+            ],
+            "type": "Event"
+        },
+        {
+            "name": "BrokerLoadUpdated",
+            "values": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "currentLoad",
+                    "type": "UINT256"
+                }
+            ],
+            "type": "Event"
+        },
+        {
+            "name": "BrokerDeactivated",
+            "values": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                }
+            ],
+            "type": "Event"
+        },
+        {
+            "name": "BrokerActivated",
+            "values": [
+                {
+                    "name": "brokerId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                }
+            ],
+            "type": "Event"
+        }
+    ]
+}
