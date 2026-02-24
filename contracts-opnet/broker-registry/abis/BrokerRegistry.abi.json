@@ -21,10 +21,6 @@
                 {
                     "name": "region",
                     "type": "STRING"
-                },
-                {
-                    "name": "capacity",
-                    "type": "UINT256"
                 }
             ],
             "outputs": [
@@ -56,32 +52,6 @@
                 {
                     "name": "region",
                     "type": "STRING"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "updateCapacity",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "capacity",
-                    "type": "UINT256"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "updateLoad",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "currentLoad",
-                    "type": "UINT256"
                 }
             ],
             "outputs": []
@@ -146,14 +116,6 @@
                 {
                     "name": "active",
                     "type": "BOOL"
-                },
-                {
-                    "name": "capacity",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "currentLoad",
-                    "type": "UINT256"
                 },
                 {
                     "name": "registeredAt",
@@ -262,20 +224,6 @@
                 {
                     "name": "operator",
                     "type": "ADDRESS"
-                }
-            ],
-            "type": "Event"
-        },
-        {
-            "name": "BrokerLoadUpdated",
-            "values": [
-                {
-                    "name": "brokerId",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "currentLoad",
-                    "type": "UINT256"
                 }
             ],
             "type": "Event"

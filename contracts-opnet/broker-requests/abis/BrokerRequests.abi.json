@@ -23,69 +23,13 @@
             ]
         },
         {
-            "name": "submitResponse",
+            "name": "setCapacityStatus",
             "type": "Function",
             "payable": false,
             "onlyOwner": false,
             "inputs": [
                 {
-                    "name": "requestId",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "encryptedPayload",
-                    "type": "STRING"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "markExpired",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "requestIds",
-                    "type": "UINT256"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "releaseAllocation",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "nftContract",
-                    "type": "ADDRESS"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "setExpirationBlocks",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "blocks",
-                    "type": "UINT256"
-                }
-            ],
-            "outputs": []
-        },
-        {
-            "name": "setTotalCapacity",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "capacity",
+                    "name": "status",
                     "type": "UINT256"
                 }
             ],
@@ -104,6 +48,10 @@
             ],
             "outputs": [
                 {
+                    "name": "id",
+                    "type": "UINT256"
+                },
+                {
                     "name": "requester",
                     "type": "ADDRESS"
                 },
@@ -116,19 +64,7 @@
                     "type": "STRING"
                 },
                 {
-                    "name": "status",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "responsePayload",
-                    "type": "STRING"
-                },
-                {
                     "name": "submittedAt",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "respondedAt",
                     "type": "UINT256"
                 }
             ]
@@ -139,63 +75,6 @@
             "payable": false,
             "onlyOwner": false,
             "inputs": [],
-            "outputs": [
-                {
-                    "name": "count",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getAvailableCapacity",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "available",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getRequestsByRequester",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "requester",
-                    "type": "ADDRESS"
-                },
-                {
-                    "name": "offset",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "limit",
-                    "type": "UINT256"
-                }
-            ],
-            "outputs": [
-                {
-                    "name": "requestIds",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getRequestCountByRequester",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [
-                {
-                    "name": "requester",
-                    "type": "ADDRESS"
-                }
-            ],
             "outputs": [
                 {
                     "name": "count",
@@ -222,53 +101,14 @@
             ]
         },
         {
-            "name": "getExpirationBlocks",
+            "name": "getCapacityStatus",
             "type": "Function",
             "payable": false,
             "onlyOwner": false,
             "inputs": [],
             "outputs": [
                 {
-                    "name": "blocks",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getTotalCapacity",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "capacity",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getActiveCount",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "count",
-                    "type": "UINT256"
-                }
-            ]
-        },
-        {
-            "name": "getPendingCount",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "count",
+                    "name": "status",
                     "type": "UINT256"
                 }
             ]
@@ -293,34 +133,6 @@
                 {
                     "name": "encryptedPayload",
                     "type": "STRING"
-                }
-            ],
-            "type": "Event"
-        },
-        {
-            "name": "ResponseSubmitted",
-            "values": [
-                {
-                    "name": "requestId",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "status",
-                    "type": "UINT256"
-                },
-                {
-                    "name": "encryptedPayload",
-                    "type": "STRING"
-                }
-            ],
-            "type": "Event"
-        },
-        {
-            "name": "RequestExpired",
-            "values": [
-                {
-                    "name": "requestId",
-                    "type": "UINT256"
                 }
             ],
             "type": "Event"

@@ -25,8 +25,6 @@ const brokerRequestsContractPointer: u16 = Blockchain.nextPointer;
 const brokerEncryptionPubkeyPointer: u16 = Blockchain.nextPointer;
 const brokerRegionPointer: u16 = Blockchain.nextPointer;
 const brokerActivePointer: u16 = Blockchain.nextPointer;
-const brokerCapacityPointer: u16 = Blockchain.nextPointer;
-const brokerCurrentLoadPointer: u16 = Blockchain.nextPointer;
 const brokerRegisteredAtPointer: u16 = Blockchain.nextPointer;
 const operatorToBrokerIdPointer: u16 = Blockchain.nextPointer;
 const requestsContractToBrokerIdPointer: u16 = Blockchain.nextPointer;
@@ -78,16 +76,6 @@ class BrokerActivatedEvent extends NetEvent {
     }
 }
 
-@final
-class BrokerLoadUpdatedEvent extends NetEvent {
-    public constructor(brokerId: u256, currentLoad: u256) {
-        const data: BytesWriter = new BytesWriter(U256_BYTE_LENGTH + U256_BYTE_LENGTH);
-        data.writeU256(brokerId);
-        data.writeU256(currentLoad);
-        super('BrokerLoadUpdated', data);
-    }
-}
-
 // ── Contract ────────────────────────────────────────────────────────
 
 @final
@@ -96,8 +84,6 @@ export class BrokerRegistry extends OP_NET {
     private readonly brokerOperatorMap: StoredMapU256;
     private readonly brokerRequestsContractMap: StoredMapU256;
     private readonly brokerActiveMap: StoredMapU256;
-    private readonly brokerCapacityMap: StoredMapU256;
-    private readonly brokerCurrentLoadMap: StoredMapU256;
     private readonly brokerRegisteredAtMap: StoredMapU256;
     private readonly operatorToBrokerId: AddressMemoryMap;
     private readonly requestsContractToBrokerId: AddressMemoryMap;
@@ -108,8 +94,6 @@ export class BrokerRegistry extends OP_NET {
         this.brokerOperatorMap = new StoredMapU256(brokerOperatorPointer);
         this.brokerRequestsContractMap = new StoredMapU256(brokerRequestsContractPointer);
         this.brokerActiveMap = new StoredMapU256(brokerActivePointer);
-        this.brokerCapacityMap = new StoredMapU256(brokerCapacityPointer);
-        this.brokerCurrentLoadMap = new StoredMapU256(brokerCurrentLoadPointer);
         this.brokerRegisteredAtMap = new StoredMapU256(brokerRegisteredAtPointer);
         this.operatorToBrokerId = new AddressMemoryMap(operatorToBrokerIdPointer);
         this.requestsContractToBrokerId = new AddressMemoryMap(requestsContractToBrokerIdPointer);
@@ -127,7 +111,6 @@ export class BrokerRegistry extends OP_NET {
         { name: 'requestsContract', type: ABIDataTypes.ADDRESS },
         { name: 'encryptionPubkey', type: ABIDataTypes.STRING },
         { name: 'region', type: ABIDataTypes.STRING },
-        { name: 'capacity', type: ABIDataTypes.UINT256 },
     )
     @returns({ name: 'brokerId', type: ABIDataTypes.UINT256 })
     @emit('BrokerRegistered')
@@ -138,7 +121,6 @@ export class BrokerRegistry extends OP_NET {
         const requestsContract: Address = calldata.readAddress();
         const encryptionPubkey: string = calldata.readStringWithLength();
         const region: string = calldata.readStringWithLength();
-        const capacity: u256 = calldata.readU256();
 
         if (operator === Address.zero()) throw new Revert('Invalid operator address');
         if (requestsContract === Address.zero()) throw new Revert('Invalid requests contract');
@@ -179,8 +161,6 @@ export class BrokerRegistry extends OP_NET {
         regionStore.value = region;
 
         this.brokerActiveMap.set(brokerId, u256.One);
-        this.brokerCapacityMap.set(brokerId, capacity);
-        this.brokerCurrentLoadMap.set(brokerId, u256.Zero);
         this.brokerRegisteredAtMap.set(brokerId, u256.fromU64(Blockchain.block.number));
 
         // Update mappings
@@ -227,36 +207,6 @@ export class BrokerRegistry extends OP_NET {
         regionStore.value = region;
 
         this.emitEvent(new BrokerUpdatedEvent(brokerId, Blockchain.tx.sender));
-        return new BytesWriter(0);
-    }
-
-    @method({ name: 'capacity', type: ABIDataTypes.UINT256 })
-    @emit('BrokerUpdated')
-    public updateCapacity(calldata: Calldata): BytesWriter {
-        const brokerId: u256 = this.requireOperator();
-        const capacity: u256 = calldata.readU256();
-
-        this.brokerCapacityMap.set(brokerId, capacity);
-
-        this.emitEvent(new BrokerUpdatedEvent(brokerId, Blockchain.tx.sender));
-        return new BytesWriter(0);
-    }
-
-    @method({ name: 'currentLoad', type: ABIDataTypes.UINT256 })
-    @emit('BrokerLoadUpdated')
-    public updateLoad(calldata: Calldata): BytesWriter {
-        const brokerId: u256 = this.requireOperator();
-        const currentLoad: u256 = calldata.readU256();
-
-        const capacity: u256 = this.brokerCapacityMap.get(brokerId);
-        // 0 = unlimited
-        if (!capacity.isZero() && currentLoad > capacity) {
-            throw new Revert('Load exceeds capacity');
-        }
-
-        this.brokerCurrentLoadMap.set(brokerId, currentLoad);
-
-        this.emitEvent(new BrokerLoadUpdatedEvent(brokerId, currentLoad));
         return new BytesWriter(0);
     }
 
@@ -324,8 +274,6 @@ export class BrokerRegistry extends OP_NET {
         { name: 'encryptionPubkey', type: ABIDataTypes.STRING },
         { name: 'region', type: ABIDataTypes.STRING },
         { name: 'active', type: ABIDataTypes.BOOL },
-        { name: 'capacity', type: ABIDataTypes.UINT256 },
-        { name: 'currentLoad', type: ABIDataTypes.UINT256 },
         { name: 'registeredAt', type: ABIDataTypes.UINT256 },
     )
     public getBroker(calldata: Calldata): BytesWriter {
@@ -342,8 +290,6 @@ export class BrokerRegistry extends OP_NET {
         const regionStore = new StoredString(brokerRegionPointer, brokerIndex);
         const region: string = regionStore.value;
         const active: bool = !this.brokerActiveMap.get(brokerId).isZero();
-        const capacity: u256 = this.brokerCapacityMap.get(brokerId);
-        const currentLoad: u256 = this.brokerCurrentLoadMap.get(brokerId);
         const registeredAt: u256 = this.brokerRegisteredAtMap.get(brokerId);
 
         const writer: BytesWriter = new BytesWriter(
@@ -352,8 +298,6 @@ export class BrokerRegistry extends OP_NET {
                 4 + encryptionPubkey.length +
                 4 + region.length +
                 1 +
-                U256_BYTE_LENGTH +
-                U256_BYTE_LENGTH +
                 U256_BYTE_LENGTH,
         );
         writer.writeAddress(this.u256ToAddress(operatorU256));
@@ -361,8 +305,6 @@ export class BrokerRegistry extends OP_NET {
         writer.writeStringWithLength(encryptionPubkey);
         writer.writeStringWithLength(region);
         writer.writeBoolean(active);
-        writer.writeU256(capacity);
-        writer.writeU256(currentLoad);
         writer.writeU256(registeredAt);
         return writer;
     }

@@ -14,10 +14,6 @@ export type BrokerUpdatedEvent = {
     readonly brokerId: bigint;
     readonly operator: Address;
 };
-export type BrokerLoadUpdatedEvent = {
-    readonly brokerId: bigint;
-    readonly currentLoad: bigint;
-};
 export type BrokerDeactivatedEvent = {
     readonly brokerId: bigint;
     readonly operator: Address;
@@ -52,16 +48,6 @@ export type UpdateEncryptionPubkey = CallResult<{}, OPNetEvent<BrokerUpdatedEven
 export type UpdateRegion = CallResult<{}, OPNetEvent<BrokerUpdatedEvent>[]>;
 
 /**
- * @description Represents the result of the updateCapacity function call.
- */
-export type UpdateCapacity = CallResult<{}, OPNetEvent<BrokerUpdatedEvent>[]>;
-
-/**
- * @description Represents the result of the updateLoad function call.
- */
-export type UpdateLoad = CallResult<{}, OPNetEvent<BrokerLoadUpdatedEvent>[]>;
-
-/**
  * @description Represents the result of the deactivate function call.
  */
 export type Deactivate = CallResult<{}, OPNetEvent<BrokerDeactivatedEvent>[]>;
@@ -86,8 +72,6 @@ export type GetBroker = CallResult<
         encryptionPubkey: string;
         region: string;
         active: boolean;
-        capacity: bigint;
-        currentLoad: bigint;
         registeredAt: bigint;
     },
     OPNetEvent<never>[]
@@ -142,12 +126,9 @@ export interface IBrokerRegistry extends IOP_NETContract {
         requestsContract: Address,
         encryptionPubkey: string,
         region: string,
-        capacity: bigint,
     ): Promise<RegisterBroker>;
     updateEncryptionPubkey(encryptionPubkey: string): Promise<UpdateEncryptionPubkey>;
     updateRegion(region: string): Promise<UpdateRegion>;
-    updateCapacity(capacity: bigint): Promise<UpdateCapacity>;
-    updateLoad(currentLoad: bigint): Promise<UpdateLoad>;
     deactivate(): Promise<Deactivate>;
     activate(): Promise<Activate>;
     removeBroker(brokerId: bigint): Promise<RemoveBroker>;

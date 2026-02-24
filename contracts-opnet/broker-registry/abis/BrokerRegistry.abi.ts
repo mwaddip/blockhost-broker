@@ -20,14 +20,6 @@ export const BrokerRegistryEvents = [
         type: BitcoinAbiTypes.Event,
     },
     {
-        name: 'BrokerLoadUpdated',
-        values: [
-            { name: 'brokerId', type: ABIDataTypes.UINT256 },
-            { name: 'currentLoad', type: ABIDataTypes.UINT256 },
-        ],
-        type: BitcoinAbiTypes.Event,
-    },
-    {
         name: 'BrokerDeactivated',
         values: [
             { name: 'brokerId', type: ABIDataTypes.UINT256 },
@@ -53,7 +45,6 @@ export const BrokerRegistryAbi = [
             { name: 'requestsContract', type: ABIDataTypes.ADDRESS },
             { name: 'encryptionPubkey', type: ABIDataTypes.STRING },
             { name: 'region', type: ABIDataTypes.STRING },
-            { name: 'capacity', type: ABIDataTypes.UINT256 },
         ],
         outputs: [{ name: 'brokerId', type: ABIDataTypes.UINT256 }],
         type: BitcoinAbiTypes.Function,
@@ -67,18 +58,6 @@ export const BrokerRegistryAbi = [
     {
         name: 'updateRegion',
         inputs: [{ name: 'region', type: ABIDataTypes.STRING }],
-        outputs: [],
-        type: BitcoinAbiTypes.Function,
-    },
-    {
-        name: 'updateCapacity',
-        inputs: [{ name: 'capacity', type: ABIDataTypes.UINT256 }],
-        outputs: [],
-        type: BitcoinAbiTypes.Function,
-    },
-    {
-        name: 'updateLoad',
-        inputs: [{ name: 'currentLoad', type: ABIDataTypes.UINT256 }],
         outputs: [],
         type: BitcoinAbiTypes.Function,
     },
@@ -109,8 +88,6 @@ export const BrokerRegistryAbi = [
             { name: 'encryptionPubkey', type: ABIDataTypes.STRING },
             { name: 'region', type: ABIDataTypes.STRING },
             { name: 'active', type: ABIDataTypes.BOOL },
-            { name: 'capacity', type: ABIDataTypes.UINT256 },
-            { name: 'currentLoad', type: ABIDataTypes.UINT256 },
             { name: 'registeredAt', type: ABIDataTypes.UINT256 },
         ],
         type: BitcoinAbiTypes.Function,
