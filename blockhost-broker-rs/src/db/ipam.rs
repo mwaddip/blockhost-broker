@@ -291,7 +291,7 @@ impl Ipam {
         prefix: &str,
     ) -> Result<Option<Allocation>, IpamError> {
         let row = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE prefix = ?",
+            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE prefix = ?",
         )
         .bind(prefix)
         .fetch_optional(&self.pool)
@@ -306,7 +306,7 @@ impl Ipam {
         pubkey: &str,
     ) -> Result<Option<Allocation>, IpamError> {
         let row = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE pubkey = ?",
+            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE pubkey = ?",
         )
         .bind(pubkey)
         .fetch_optional(&self.pool)
@@ -321,7 +321,7 @@ impl Ipam {
         nft_contract: &str,
     ) -> Result<Option<Allocation>, IpamError> {
         let row = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE nft_contract = ?",
+            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE nft_contract = ?",
         )
         .bind(nft_contract.to_lowercase())
         .fetch_optional(&self.pool)
@@ -333,7 +333,7 @@ impl Ipam {
     /// List all allocations.
     pub async fn list_allocations(&self) -> Result<Vec<Allocation>, IpamError> {
         let rows = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations ORDER BY prefix_index",
+            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, last_seen_at, is_test, expires_at FROM allocations ORDER BY prefix_index",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -411,7 +411,7 @@ impl Ipam {
     pub async fn get_expired_test_allocations(&self) -> Result<Vec<Allocation>, IpamError> {
         let now = Utc::now().to_rfc3339();
         let rows = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE is_test = 1 AND expires_at IS NOT NULL AND expires_at < ?",
+            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE is_test = 1 AND expires_at IS NOT NULL AND expires_at < ?",
         )
         .bind(&now)
         .fetch_all(&self.pool)
