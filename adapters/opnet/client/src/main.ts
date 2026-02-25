@@ -40,6 +40,7 @@ import {
     deserializeResponse,
     generateWgKeypair,
     generateServerKeypair,
+    serverKeypairFromHex,
     serializeRequestPayload,
 } from './crypto.js';
 
@@ -65,6 +66,7 @@ interface Args {
     brokerId: bigint;
     maxSat: bigint;
     timeoutMs: number;
+    serverKey: string | null;
 }
 
 function parseArgs(): Args {
@@ -81,7 +83,8 @@ function parseArgs(): Args {
             `  --registry-pubkey 0x.. BrokerRegistry pubkey\n` +
             `  --broker-id N          Broker ID (default: 1)\n` +
             `  --max-sat N            Max satoshi to spend (default: 100000)\n` +
-            `  --timeout N            Response timeout in seconds (default: 1200)\n`,
+            `  --timeout N            Response timeout in seconds (default: 1200)\n` +
+            `  --server-key 0x...     Persistent ECIES private key hex (optional, generates ephemeral if omitted)\n`,
         );
         process.exit(command ? 0 : 1);
     }
@@ -95,6 +98,12 @@ function parseArgs(): Args {
         return argv[idx + 1];
     }
 
+    function getFlagOptional(name: string): string | null {
+        const idx = argv.indexOf(name);
+        if (idx === -1 || idx + 1 >= argv.length) return null;
+        return argv[idx + 1];
+    }
+
     return {
         command,
         rpcUrl: getFlag('--rpc-url', 'https://regtest.opnet.org'),
@@ -104,6 +113,7 @@ function parseArgs(): Args {
         brokerId: BigInt(getFlag('--broker-id', '1')),
         maxSat: BigInt(getFlag('--max-sat', '100000')),
         timeoutMs: Number(getFlag('--timeout', '1200')) * 1000,
+        serverKey: getFlagOptional('--server-key'),
     };
 }
 
@@ -238,7 +248,9 @@ async function cmdRequest(args: Args): Promise<void> {
 
     // 3. Generate keypairs
     const wgKeys = generateWgKeypair();
-    const serverKeys = generateServerKeypair();
+    const serverKeys = args.serverKey
+        ? serverKeypairFromHex(args.serverKey)
+        : generateServerKeypair();
 
     log(`WG pubkey: ${wgKeys.publicKeyBase64}`);
 

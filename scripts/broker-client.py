@@ -333,12 +333,29 @@ def resolve_chain(nft_contract: str, adapters: list[ChainAdapter]) -> Optional[C
     return None
 
 
+def load_or_generate_server_key(config_dir: Path) -> "ECIESClient":
+    """Load persistent ECIES server key, generating and saving it on first use."""
+    server_key_file = config_dir / "server.key"
+    if server_key_file.exists():
+        key = server_key_file.read_text().strip()
+        client = ECIESClient(private_key_hex=key)
+        print(f"Using server key: {client.public_key_hex[:16]}...")
+    else:
+        client = ECIESClient()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        server_key_file.write_text(client.private_key_hex + "\n")
+        server_key_file.chmod(0o600)
+        print(f"Generated new server key: {client.public_key_hex[:16]}...")
+    return client
+
+
 def request_via_external_adapter(
     adapter: ChainAdapter,
     nft_contract: str,
     wallet_key_path: str,
     broker_id: Optional[int],
     timeout: int,
+    server_key_hex: Optional[str] = None,
 ) -> dict:
     """Run an external chain adapter as a subprocess and return the allocation JSON.
 
@@ -362,6 +379,9 @@ def request_via_external_adapter(
     # Read wallet key — for OPNet this is a mnemonic file
     wallet_key = Path(wallet_key_path).read_text().strip()
     cmd += ["--mnemonic", wallet_key]
+
+    if server_key_hex is not None:
+        cmd += ["--server-key", server_key_hex]
 
     print(f"Running {adapter.name} adapter: {cmd[0]} ...")
 
@@ -1075,6 +1095,8 @@ def _cmd_request_external(
     """Handle request via an external chain adapter subprocess."""
     print(f"Chain: {chain.name}")
 
+    ecies_client = load_or_generate_server_key(config_dir)
+
     try:
         result = request_via_external_adapter(
             adapter=chain,
@@ -1082,6 +1104,7 @@ def _cmd_request_external(
             wallet_key_path=args.wallet_key,
             broker_id=getattr(args, "broker_id", None),
             timeout=args.timeout,
+            server_key_hex=ecies_client.private_key_hex,
         )
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
         print(f"Adapter error: {e}", file=sys.stderr)
@@ -1139,16 +1162,7 @@ def _cmd_request_external(
 
 def _cmd_request_evm(args: argparse.Namespace, config_dir: Path) -> int:
     """Handle request via the builtin EVM path."""
-    # Load server key for ECIES operations
-    server_key_file = config_dir / "server.key"
-    if not server_key_file.exists():
-        print(f"Server key not found at {server_key_file}", file=sys.stderr)
-        print("Run the setup wizard first to generate the server keypair", file=sys.stderr)
-        return 1
-
-    server_key = server_key_file.read_text().strip()
-    ecies_client = ECIESClient(private_key_hex=server_key)
-    print(f"Using server key: {ecies_client.public_key_hex[:16]}...")
+    ecies_client = load_or_generate_server_key(config_dir)
 
     # Load wallet
     wallet_key = Path(args.wallet_key).read_text().strip()
@@ -1256,16 +1270,7 @@ def cmd_renew(args: argparse.Namespace) -> int:
     if broker_contract.broker_id:
         print(f"  Broker ID: #{broker_contract.broker_id}")
 
-    # Load server key for ECIES operations
-    server_key_file = Path(args.config_dir) / "server.key"
-    if not server_key_file.exists():
-        print(f"Server key not found at {server_key_file}", file=sys.stderr)
-        print("Run the setup wizard first to generate the server keypair", file=sys.stderr)
-        return 1
-
-    server_key = server_key_file.read_text().strip()
-    ecies_client = ECIESClient(private_key_hex=server_key)
-    print(f"Using server key: {ecies_client.public_key_hex[:16]}...")
+    ecies_client = load_or_generate_server_key(Path(args.config_dir))
 
     # Load wallet
     wallet_key = Path(args.wallet_key).read_text().strip()

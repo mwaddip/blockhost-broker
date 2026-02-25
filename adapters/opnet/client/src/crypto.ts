@@ -232,6 +232,17 @@ export function generateServerKeypair(): ServerKeypair {
     };
 }
 
+export function serverKeypairFromHex(hex: string): ServerKeypair {
+    const h = hex.startsWith('0x') ? hex.slice(2) : hex;
+    const privateKey = Uint8Array.from(Buffer.from(h, 'hex'));
+    if (privateKey.length !== 32) throw new Error(`Server key must be 32 bytes, got ${privateKey.length}`);
+    return {
+        privateKey,
+        publicKeyCompressed: secp256k1.getPublicKey(privateKey, true),
+        publicKeyUncompressed: secp256k1.getPublicKey(privateKey, false),
+    };
+}
+
 // ── Binary request payload ──────────────────────────────────────────
 //
 // Layout (65 bytes):
