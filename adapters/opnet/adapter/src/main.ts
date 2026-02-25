@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import { JSONRpcProvider } from 'opnet';
 import { loadConfig } from './config.js';
 import { RequestsContract, type OnChainRequest } from './contract.js';
@@ -6,6 +7,29 @@ import { ResponseDelivery } from './delivery.js';
 import { RequestPoller } from './poller.js';
 
 const config = loadConfig();
+
+// ── Persistent state ─────────────────────────────────────────────────
+
+interface AdapterState {
+    lastProcessedId: string;
+}
+
+function loadState(): bigint {
+    try {
+        const data = JSON.parse(fs.readFileSync(config.stateFile, 'utf-8')) as AdapterState;
+        const id = BigInt(data.lastProcessedId);
+        console.log(`[state] Loaded lastProcessedId=${id} from ${config.stateFile}`);
+        return id;
+    } catch {
+        console.log(`[state] No state file found, starting from 0`);
+        return 0n;
+    }
+}
+
+function saveState(lastProcessedId: bigint): void {
+    const data: AdapterState = { lastProcessedId: lastProcessedId.toString() };
+    fs.writeFileSync(config.stateFile, JSON.stringify(data) + '\n');
+}
 
 // ── Services ────────────────────────────────────────────────────────
 
@@ -101,7 +125,10 @@ async function handleNewRequests(requests: OnChainRequest[]): Promise<void> {
 
 // ── Poller ───────────────────────────────────────────────────────────
 
-const poller = new RequestPoller(provider, contract, handleNewRequests);
+const poller = new RequestPoller(provider, contract, handleNewRequests, (id) => {
+    saveState(id);
+    console.log(`[state] Saved lastProcessedId=${id}`);
+});
 
 // ── Main ────────────────────────────────────────────────────────────
 
@@ -111,6 +138,12 @@ async function main(): Promise<void> {
     console.log(`[adapter] ECIES pubkey: ${encryption.publicKeyHex().slice(0, 20)}...`);
     console.log(`[adapter] Broker API: ${config.brokerApiUrl}`);
     console.log(`[adapter] Source: ${config.source}`);
+
+    // Restore state from previous run
+    const lastId = loadState();
+    if (lastId > 0n) {
+        poller.setLastProcessedId(lastId);
+    }
 
     poller.start();
 

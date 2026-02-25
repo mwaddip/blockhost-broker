@@ -17,6 +17,8 @@ export interface AdapterConfig {
     source: string;
     /** Lease duration in seconds (0 = no expiry) */
     leaseDuration: number;
+    /** Path to persistent state file */
+    stateFile: string;
 }
 
 export function loadConfig(): AdapterConfig {
@@ -41,6 +43,7 @@ export function loadConfig(): AdapterConfig {
         brokerApiUrl: requireEnv('BROKER_API_URL', 'http://127.0.0.1:8080'),
         source: requireEnv('ADAPTER_SOURCE', `opnet-${networkName}`),
         leaseDuration: parseInt(requireEnv('LEASE_DURATION', networkName === 'regtest' ? '86400' : '0'), 10),
+        stateFile: requireEnv('STATE_FILE', `/var/lib/blockhost-broker/adapter-opnet-${networkName}.state`),
     };
 }
 

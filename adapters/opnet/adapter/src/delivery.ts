@@ -144,6 +144,13 @@ function buildOpReturn(encrypted: Uint8Array): Uint8Array {
 export class ResponseDelivery {
     private wallet;
     private eciesPrivkey: Uint8Array;
+    /** Change UTXO from the last unconfirmed delivery, used to chain txs. */
+    private pendingChange: {
+        transactionId: string;
+        outputIndex: number;
+        value: bigint;
+        scriptPubKey: { hex: string; address: string };
+    } | null = null;
 
     constructor(
         private provider: JSONRpcProvider,
@@ -192,16 +199,25 @@ export class ResponseDelivery {
         // 2. Build OP_RETURN script
         const opReturnScript = buildOpReturn(encrypted);
 
-        // 3. Get UTXOs
-        const utxos = await this.provider.utxoManager.getUTXOs({
-            address: this.wallet.p2tr,
-        });
+        // 3. Get UTXOs — use pending change from previous unconfirmed tx if available
+        let utxos;
+        if (this.pendingChange) {
+            console.log(
+                `[delivery] Using chained UTXO from previous tx: ${this.pendingChange.transactionId}:${this.pendingChange.outputIndex} (${this.pendingChange.value} sats)`,
+            );
+            utxos = [this.pendingChange];
+            this.pendingChange = null;
+        } else {
+            utxos = await this.provider.utxoManager.getUTXOs({
+                address: this.wallet.p2tr,
+            });
+        }
 
         if (utxos.length === 0) {
             throw new Error('No UTXOs available for response delivery');
         }
 
-        const totalBalance = utxos.reduce((sum, u) => sum + u.value, 0n);
+        const totalBalance = utxos.reduce((sum: bigint, u: any) => sum + u.value, 0n);
         console.log(
             `[delivery] Operator ${this.wallet.p2tr}: ${utxos.length} UTXO(s), ${totalBalance} sats`,
         );
@@ -233,8 +249,29 @@ export class ResponseDelivery {
             );
         }
 
-        const txid = result.result ?? hex.slice(0, 64);
+        const txid = result.result ?? signed.getId();
         console.log(`[delivery] Response broadcast: ${txid}`);
+
+        // Track the change output for UTXO chaining
+        for (let i = 0; i < signed.outs.length; i++) {
+            const out = signed.outs[i];
+            if (out.value > 0 && out.script[0] !== opcodes.OP_RETURN) {
+                this.pendingChange = {
+                    transactionId: txid,
+                    outputIndex: i,
+                    value: BigInt(out.value),
+                    scriptPubKey: {
+                        hex: Buffer.from(out.script).toString('hex'),
+                        address: this.wallet.p2tr,
+                    },
+                };
+                console.log(
+                    `[delivery] Tracked change UTXO: ${txid}:${i} (${out.value} sats)`,
+                );
+                break;
+            }
+        }
+
         return txid;
     }
 }

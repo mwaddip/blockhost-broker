@@ -35,6 +35,7 @@ export class RequestPoller {
         private provider: JSONRpcProvider,
         private contract: RequestsContract,
         private onNewRequests: (requests: OnChainRequest[]) => Promise<void>,
+        private onStateChange?: (lastProcessedId: bigint) => void,
     ) {}
 
     /** Set the starting point (e.g. restored from persistent state). */
@@ -94,11 +95,9 @@ export class RequestPoller {
 
         await this.onNewRequests(deduplicated);
 
-        const maxId = newRequests.reduce(
-            (max, r) => (r.id > max ? r.id : max),
-            0n,
-        );
-        this.lastProcessedId = maxId;
+        // Advance to the total count (includes deduplicated/skipped requests)
+        this.lastProcessedId = count;
+        this.onStateChange?.(this.lastProcessedId);
 
         return deduplicated.length;
     }
