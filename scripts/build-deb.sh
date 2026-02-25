@@ -27,27 +27,26 @@ cp broker-client.py "build/${PKG_NAME}/opt/blockhost-client/"
 cp requirements.txt "build/${PKG_NAME}/opt/blockhost-client/"
 cp debian/broker-client-wrapper "build/${PKG_NAME}/usr/bin/broker-client"
 
-# Chain config example
-cp broker-chains.json.example "build/${PKG_NAME}/etc/blockhost/"
+# Chain config (conffile — dpkg won't overwrite user edits on upgrade)
+cp broker-chains.json "build/${PKG_NAME}/etc/blockhost/"
 
 # ── Chain client plugins ─────────────────────────────────────────────
 
-# OPNet client
+# OPNet client (esbuild bundle — single file, no node_modules needed)
 OPNET_CLIENT="${REPO_ROOT}/adapters/opnet/client"
 if [ -d "$OPNET_CLIENT/src" ]; then
-    echo "Including OPNet client plugin..."
+    echo "Building OPNet client plugin..."
     DEST="build/${PKG_NAME}/opt/blockhost/adapters/opnet/client"
-    mkdir -p "$DEST/src"
+    mkdir -p "$DEST/dist"
 
     # Install dependencies if needed
     if [ ! -d "$OPNET_CLIENT/node_modules" ]; then
         (cd "$OPNET_CLIENT" && npm ci --ignore-scripts)
     fi
 
-    cp -r "$OPNET_CLIENT/src/"*.ts "$DEST/src/"
-    cp "$OPNET_CLIENT/package.json" "$DEST/"
-    cp "$OPNET_CLIENT/tsconfig.json" "$DEST/"
-    cp -r "$OPNET_CLIENT/node_modules" "$DEST/"
+    # Bundle into a single JS file
+    (cd "$OPNET_CLIENT" && npm run build)
+    cp "$OPNET_CLIENT/dist/main.js" "$DEST/dist/"
 fi
 
 # (Future chain clients would be added here)
@@ -84,12 +83,18 @@ chmod 644 "build/${PKG_NAME}/opt/blockhost-client/requirements.txt"
 chmod 755 "build/${PKG_NAME}/usr/bin/broker-client"
 chmod 755 "build/${PKG_NAME}/DEBIAN/postinst"
 chmod 750 "build/${PKG_NAME}/etc/blockhost"
-chmod 644 "build/${PKG_NAME}/etc/blockhost/broker-chains.json.example"
+chmod 644 "build/${PKG_NAME}/etc/blockhost/broker-chains.json"
 
 if [ -d "build/${PKG_NAME}/opt/blockhost/adapters" ]; then
     find "build/${PKG_NAME}/opt/blockhost/adapters" -type f -exec chmod 644 {} \;
     find "build/${PKG_NAME}/opt/blockhost/adapters" -type d -exec chmod 755 {} \;
 fi
+
+# ── Conffiles (dpkg won't overwrite user edits on upgrade) ───────
+
+cat > "build/${PKG_NAME}/DEBIAN/conffiles" << EOF
+/etc/blockhost/broker-chains.json
+EOF
 
 # ── Build ────────────────────────────────────────────────────────────
 
