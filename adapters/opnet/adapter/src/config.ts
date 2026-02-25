@@ -15,6 +15,8 @@ export interface AdapterConfig {
     brokerApiUrl: string;
     /** Adapter source identifier (e.g. "opnet-regtest") */
     source: string;
+    /** Lease duration in seconds (0 = no expiry) */
+    leaseDuration: number;
 }
 
 export function loadConfig(): AdapterConfig {
@@ -38,6 +40,7 @@ export function loadConfig(): AdapterConfig {
         eciesPrivateKey: requireEnv('BROKER_ECIES_PRIVATE_KEY'),
         brokerApiUrl: requireEnv('BROKER_API_URL', 'http://127.0.0.1:8080'),
         source: requireEnv('ADAPTER_SOURCE', `opnet-${networkName}`),
+        leaseDuration: parseInt(requireEnv('LEASE_DURATION', networkName === 'regtest' ? '86400' : '0'), 10),
     };
 }
 

@@ -37,6 +37,7 @@ async function requestAllocation(
         wg_pubkey: wgPubkey,
         nft_contract: nftContract,
         source: config.source,
+        ...(config.leaseDuration > 0 && { lease_duration: config.leaseDuration }),
     });
 
     const resp = await fetch(url, {
