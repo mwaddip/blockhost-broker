@@ -653,8 +653,6 @@ class BrokerClient:
             for block_num in range(last_scanned_block + 1, latest_block + 1):
                 block = self.w3.eth.get_block(block_num, full_transactions=True)
                 for tx in block["transactions"]:
-                    if not isinstance(tx, dict):
-                        continue
                     tx_from = tx.get("from", "").lower()
                     tx_to = (tx.get("to") or "").lower()
                     if broker_operator and tx_from != broker_operator.lower():
