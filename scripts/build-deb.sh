@@ -21,6 +21,8 @@ mkdir -p "build/${PKG_NAME}/DEBIAN"
 mkdir -p "build/${PKG_NAME}/opt/blockhost-client"
 mkdir -p "build/${PKG_NAME}/usr/bin"
 mkdir -p "build/${PKG_NAME}/etc/blockhost"
+mkdir -p "build/${PKG_NAME}/usr/share/blockhost"
+mkdir -p "build/${PKG_NAME}/usr/lib/python3/dist-packages/blockhost/broker"
 
 # Core client
 cp broker-client.py "build/${PKG_NAME}/opt/blockhost-client/"
@@ -50,6 +52,14 @@ if [ -d "$OPNET_CLIENT/src" ]; then
 fi
 
 # (Future chain clients would be added here)
+
+# ── Wizard integration hook ──────────────────────────────────────────
+
+# Manifest: discovered by the installer wizard at startup
+cp wizard/broker.json "build/${PKG_NAME}/usr/share/blockhost/"
+
+# Python module: blockhost.broker.wizard_hook (namespace package — no __init__.py)
+cp wizard/wizard_hook.py "build/${PKG_NAME}/usr/lib/python3/dist-packages/blockhost/broker/"
 
 # ── Control files ────────────────────────────────────────────────────
 
@@ -89,6 +99,10 @@ if [ -d "build/${PKG_NAME}/opt/blockhost/adapters" ]; then
     find "build/${PKG_NAME}/opt/blockhost/adapters" -type f -exec chmod 644 {} \;
     find "build/${PKG_NAME}/opt/blockhost/adapters" -type d -exec chmod 755 {} \;
 fi
+
+chmod 644 "build/${PKG_NAME}/usr/share/blockhost/broker.json"
+chmod 644 "build/${PKG_NAME}/usr/lib/python3/dist-packages/blockhost/broker/wizard_hook.py"
+find "build/${PKG_NAME}/usr/lib/python3/dist-packages/blockhost" -type d -exec chmod 755 {} \;
 
 # ── Conffiles (dpkg won't overwrite user edits on upgrade) ───────
 
