@@ -6,12 +6,12 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, delete},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::db::Ipam;
@@ -50,9 +50,40 @@ pub struct AllocationInfo {
     pub pubkey: String,
     pub endpoint: Option<String>,
     pub nft_contract: String,
+    pub source: String,
     pub allocated_at: String,
     pub last_seen_at: Option<String>,
+    pub expires_at: Option<String>,
     pub status: String,
+}
+
+/// Client configuration response (static broker info fetched through tunnel).
+#[derive(Debug, Serialize)]
+pub struct ClientConfigResponse {
+    pub dns_zone: String,
+}
+
+/// Create allocation request body.
+#[derive(Debug, Deserialize)]
+pub struct CreateAllocationRequest {
+    pub wg_pubkey: String,
+    pub nft_contract: String,
+    /// Identifies the adapter instance (e.g. "opnet-regtest", "evm-sepolia").
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub is_test: bool,
+    /// Lease duration in seconds. If set, the allocation expires after this time.
+    pub lease_duration: Option<u64>,
+}
+
+/// Create allocation response body.
+#[derive(Debug, Serialize)]
+pub struct CreateAllocationResponse {
+    pub prefix: String,
+    pub gateway: String,
+    pub broker_pubkey: String,
+    pub broker_endpoint: String,
 }
 
 /// Error response.
@@ -72,8 +103,9 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/status", get(status))
-        .route("/v1/allocations", get(list_allocations))
+        .route("/v1/allocations", get(list_allocations).post(create_allocation))
         .route("/v1/allocations/{prefix}", get(get_allocation).delete(delete_allocation))
+        .route("/v1/config", get(client_config))
         .with_state(Arc::new(state))
 }
 
@@ -82,6 +114,13 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+/// Client configuration — static broker info fetched through the tunnel.
+async fn client_config(State(state): State<Arc<AppState>>) -> Json<ClientConfigResponse> {
+    Json(ClientConfigResponse {
+        dns_zone: state.config.dns.domain.clone(),
     })
 }
 
@@ -108,6 +147,119 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<StatusRespons
     }))
 }
 
+/// Create a new allocation (used by external chain adapters).
+///
+/// If the NFT contract already has an allocation, the WG pubkey is updated
+/// and the same prefix is returned (re-request).
+async fn create_allocation(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateAllocationRequest>,
+) -> Result<(StatusCode, Json<CreateAllocationResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let nft_contract = body.nft_contract.to_lowercase();
+
+    let ipam = state.ipam.lock().await;
+    let existing = ipam
+        .get_allocation_by_nft_contract(&nft_contract)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e.to_string() }),
+            )
+        })?;
+
+    let allocation = if let Some(existing) = existing {
+        // Re-request: update pubkey, swap WG peer
+        info!(
+            nft_contract = %nft_contract,
+            prefix = %existing.prefix,
+            old_pubkey = %existing.pubkey,
+            new_pubkey = %body.wg_pubkey,
+            "Re-request from existing allocation, updating pubkey"
+        );
+
+        let updated = ipam
+            .update_allocation_pubkey(&nft_contract, &body.wg_pubkey, None)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: e.to_string() }),
+                )
+            })?;
+        drop(ipam);
+
+        let _ = state.wg.remove_peer(&existing.pubkey);
+        state
+            .wg
+            .add_peer(&body.wg_pubkey, &updated.prefix, None)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to add WireGuard peer: {}", e),
+                    }),
+                )
+            })?;
+
+        updated
+    } else {
+        // New allocation
+        let allocation = ipam
+            .allocate(&body.wg_pubkey, &nft_contract, None, body.is_test, &body.source, body.lease_duration)
+            .await
+            .map_err(|e| {
+                let (status, msg) = match &e {
+                    crate::db::ipam::IpamError::PubkeyAlreadyAllocated => {
+                        (StatusCode::CONFLICT, "WireGuard pubkey already has an allocation")
+                    }
+                    crate::db::ipam::IpamError::NoPrefixesAvailable => {
+                        (StatusCode::SERVICE_UNAVAILABLE, "No prefixes available")
+                    }
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Allocation failed"),
+                };
+                warn!(nft_contract = %nft_contract, error = %e, "Allocation failed");
+                (status, Json(ErrorResponse { error: msg.to_string() }))
+            })?;
+        drop(ipam);
+
+        // Add WireGuard peer
+        if let Err(e) = state.wg.add_peer(&body.wg_pubkey, &allocation.prefix, None) {
+            // Rollback
+            warn!(error = %e, "Failed to add WG peer, rolling back allocation");
+            let ipam = state.ipam.lock().await;
+            let _ = ipam.release(&allocation.prefix.to_string(), &nft_contract).await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to add WireGuard peer: {}", e),
+                }),
+            ));
+        }
+
+        allocation
+    };
+
+    // Build response from broker config
+    let broker_pubkey = state.wg.get_public_key().unwrap_or_default();
+
+    info!(
+        prefix = %allocation.prefix,
+        nft_contract = %nft_contract,
+        "Allocation created via API"
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateAllocationResponse {
+            prefix: allocation.prefix.to_string(),
+            gateway: state.config.broker.broker_ipv6.to_string(),
+            broker_pubkey,
+            broker_endpoint: state.config.wireguard.public_endpoint.clone(),
+        }),
+    ))
+}
+
 /// List all allocations.
 async fn list_allocations(
     State(state): State<Arc<AppState>>,
@@ -132,8 +284,10 @@ async fn list_allocations(
                 pubkey: a.pubkey,
                 endpoint: a.endpoint,
                 nft_contract: a.nft_contract,
+                source: a.source,
                 allocated_at: a.allocated_at.to_rfc3339(),
                 last_seen_at: a.last_seen_at.map(|dt| dt.to_rfc3339()),
+                expires_at: a.expires_at.map(|dt| dt.to_rfc3339()),
                 status: status.to_string(),
             }
         })
@@ -185,8 +339,10 @@ async fn get_allocation(
                 pubkey: a.pubkey,
                 endpoint: a.endpoint,
                 nft_contract: a.nft_contract,
+                source: a.source,
                 allocated_at: a.allocated_at.to_rfc3339(),
                 last_seen_at: a.last_seen_at.map(|dt| dt.to_rfc3339()),
+                expires_at: a.expires_at.map(|dt| dt.to_rfc3339()),
                 status: status.to_string(),
             }))
         }

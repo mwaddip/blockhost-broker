@@ -140,11 +140,6 @@ impl EciesEncryption {
         hex::encode(&self.private_key)
     }
 
-    /// Get uncompressed public key (65 bytes).
-    pub fn public_key_bytes(&self) -> &[u8] {
-        &self.public_key
-    }
-
     /// Get public key as hex string.
     pub fn public_key_hex(&self) -> String {
         hex::encode(&self.public_key)

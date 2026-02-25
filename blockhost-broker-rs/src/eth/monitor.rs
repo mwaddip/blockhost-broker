@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use chrono::{DateTime, TimeZone, Utc};
 use ethers::prelude::*;
 use thiserror::Error;
 use tokio::sync::watch;
@@ -55,7 +54,6 @@ pub struct PendingRequest {
     pub requester: Address,
     pub nft_contract: Address,
     pub encrypted_payload: Bytes,
-    pub submitted_at: DateTime<Utc>,
 }
 
 type SignerMiddleware = ethers::middleware::SignerMiddleware<Provider<Http>, LocalWallet>;
@@ -69,8 +67,6 @@ struct PendingVerification {
     pubkey: String,
     prefix: String,
     approved_at: Instant,
-    /// Which contract this allocation was approved on.
-    contract_address: String,
 }
 
 /// Monitors BrokerRequests contract for new allocation requests.
@@ -81,8 +77,6 @@ pub struct OnchainMonitor {
     dns_config: DnsConfig,
     ipam: Arc<tokio::sync::Mutex<Ipam>>,
     wg: Arc<WireGuardManager>,
-    provider: Provider<Http>,
-    wallet: LocalWallet,
     client: Arc<SignerMiddleware>,
     encryption: EciesEncryption,
     verifier: NftVerifier,
@@ -188,8 +182,6 @@ impl OnchainMonitor {
             dns_config,
             ipam,
             wg,
-            provider,
-            wallet,
             client,
             encryption,
             verifier,
@@ -365,9 +357,6 @@ impl OnchainMonitor {
                 requester: request.requester,
                 nft_contract: request.nft_contract,
                 encrypted_payload: request.encrypted_payload,
-                submitted_at: Utc.timestamp_opt(request.submitted_at.as_u64() as i64, 0)
-                    .single()
-                    .unwrap_or_else(Utc::now),
             });
         }
 
@@ -483,12 +472,15 @@ impl OnchainMonitor {
         } else {
             // New allocation
             let is_test = self.is_test_contract(contract_address);
+            let source = format!("evm:{}", contract_address);
             let allocation = match ipam
                 .allocate(
                     &payload.wg_pubkey,
                     &nft_contract_str,
                     None,
                     is_test,
+                    &source,
+                    None,
                 )
                 .await
             {
@@ -581,7 +573,6 @@ impl OnchainMonitor {
             pubkey: payload.wg_pubkey.clone(),
             prefix: allocation.prefix.to_string(),
             approved_at: Instant::now(),
-            contract_address: contract_address.to_string(),
         });
 
         info!(

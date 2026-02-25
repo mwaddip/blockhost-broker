@@ -13,16 +13,11 @@ use crate::config::WireGuardConfig;
 pub enum WireGuardError {
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
-
-    #[error("Interface not found: {0}")]
-    InterfaceNotFound(String),
-
-    #[error("Parse error: {0}")]
-    ParseError(String),
 }
 
 /// Status of a WireGuard peer.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PeerStatus {
     pub pubkey: String,
     pub endpoint: Option<String>,
@@ -245,19 +240,6 @@ impl WireGuardManager {
     pub fn interface_exists(&self) -> bool {
         self.run_command(&["ip", "link", "show", &self.config.interface])
             .is_ok()
-    }
-
-    /// Save current WireGuard config to file.
-    pub fn save_config(&self) -> Result<(), WireGuardError> {
-        let config_path = format!("/etc/wireguard/{}.conf", self.config.interface);
-        let output = self.run_command(&["wg", "showconf", &self.config.interface])?;
-
-        std::fs::write(&config_path, output)
-            .map_err(|e| WireGuardError::CommandFailed(format!("Failed to write config: {}", e)))?;
-
-        info!(path = %config_path, "Saved WireGuard config");
-
-        Ok(())
     }
 
     /// Maximum number of NDP proxy entries to add per allocation.

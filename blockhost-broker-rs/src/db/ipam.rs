@@ -8,7 +8,7 @@ use ipnet::Ipv6Net;
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::config::BrokerConfig;
 
@@ -155,11 +155,14 @@ impl Ipam {
         .execute(&self.pool)
         .await?;
 
-        // Migrate: add is_test and expires_at columns (idempotent — ignore if already exist)
+        // Migrate: add is_test, expires_at, source columns (idempotent — ignore if already exist)
         let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0")
             .execute(&self.pool)
             .await;
         let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN expires_at TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN source TEXT NOT NULL DEFAULT 'evm'")
             .execute(&self.pool)
             .await;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_allocations_expires_at ON allocations(expires_at)")
@@ -211,13 +214,15 @@ impl Ipam {
 
     /// Allocate a new prefix.
     /// When `is_test` is true, the allocation is tagged as a test allocation
-    /// with an automatic 24-hour expiry.
+    /// with an automatic 24-hour expiry (unless `lease_duration` overrides it).
     pub async fn allocate(
         &self,
         pubkey: &str,
         nft_contract: &str,
         endpoint: Option<&str>,
         is_test: bool,
+        source: &str,
+        lease_duration: Option<u64>,
     ) -> Result<Allocation, IpamError> {
         // Check if pubkey already has an allocation
         if self.get_allocation_by_pubkey(pubkey).await?.is_some() {
@@ -233,7 +238,9 @@ impl Ipam {
         let prefix = self.get_subnet(index);
         let now = Utc::now();
         let nft_contract_lower = nft_contract.to_lowercase();
-        let expires_at = if is_test {
+        let expires_at = if let Some(secs) = lease_duration {
+            Some(now + chrono::Duration::seconds(secs as i64))
+        } else if is_test {
             Some(now + chrono::Duration::hours(24))
         } else {
             None
@@ -241,8 +248,8 @@ impl Ipam {
 
         let id = sqlx::query(
             r#"
-            INSERT INTO allocations (prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, is_test, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO allocations (prefix, prefix_index, pubkey, endpoint, nft_contract, source, allocated_at, is_test, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(prefix.to_string())
@@ -250,6 +257,7 @@ impl Ipam {
         .bind(pubkey)
         .bind(endpoint)
         .bind(&nft_contract_lower)
+        .bind(source)
         .bind(now.to_rfc3339())
         .bind(is_test)
         .bind(expires_at.map(|dt| dt.to_rfc3339()))
@@ -258,9 +266,9 @@ impl Ipam {
         .last_insert_rowid();
 
         self.audit("allocate", Some(&nft_contract_lower), Some(&prefix.to_string()),
-                   &serde_json::json!({"pubkey": pubkey, "is_test": is_test}).to_string()).await?;
+                   &serde_json::json!({"pubkey": pubkey, "is_test": is_test, "source": source}).to_string()).await?;
 
-        info!(prefix = %prefix, pubkey = %pubkey, is_test = is_test, "Allocated prefix");
+        info!(prefix = %prefix, pubkey = %pubkey, source = source, is_test = is_test, "Allocated prefix");
 
         Ok(Allocation {
             id,
@@ -269,23 +277,12 @@ impl Ipam {
             pubkey: pubkey.to_string(),
             endpoint: endpoint.map(String::from),
             nft_contract: nft_contract_lower,
+            source: source.to_string(),
             allocated_at: now,
             last_seen_at: None,
             is_test,
             expires_at,
         })
-    }
-
-    /// Get allocation by ID.
-    pub async fn get_allocation(&self, id: i64) -> Result<Option<Allocation>, IpamError> {
-        let row = sqlx::query(
-            "SELECT id, prefix, prefix_index, pubkey, endpoint, nft_contract, allocated_at, last_seen_at, is_test, expires_at FROM allocations WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        row.map(|r| self.row_to_allocation(&r)).transpose()
     }
 
     /// Get allocation by prefix.
@@ -359,17 +356,6 @@ impl Ipam {
         } else {
             Ok(false)
         }
-    }
-
-    /// Update last seen timestamp for an allocation.
-    pub async fn update_last_seen(&self, prefix: &str, timestamp: DateTime<Utc>) -> Result<(), IpamError> {
-        sqlx::query("UPDATE allocations SET last_seen_at = ? WHERE prefix = ?")
-            .bind(timestamp.to_rfc3339())
-            .bind(prefix)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
     }
 
     /// Update the WireGuard public key for an existing allocation.
@@ -458,28 +444,6 @@ impl Ipam {
     }
 
     // State management
-
-    /// Get the last processed request ID (legacy — uses default key).
-    pub async fn get_last_processed_id(&self) -> Result<u64, IpamError> {
-        let value: String = sqlx::query_scalar("SELECT value FROM state WHERE key = 'last_processed_id'")
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(value.parse().unwrap_or(0))
-    }
-
-    /// Set the last processed request ID (legacy — uses default key).
-    pub async fn set_last_processed_id(&self, id: u64) -> Result<(), IpamError> {
-        sqlx::query(
-            "UPDATE state SET value = ?, updated_at = datetime('now') WHERE key = 'last_processed_id'",
-        )
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
-
-        debug!(last_processed_id = id, "Updated last processed ID");
-        Ok(())
-    }
 
     /// Get the last processed request ID for a specific contract address.
     pub async fn get_last_processed_id_for_contract(&self, contract: &str) -> Result<u64, IpamError> {
@@ -590,18 +554,6 @@ impl Ipam {
         ))
     }
 
-    /// Get token by hash.
-    pub async fn get_token(&self, token_hash: &str) -> Result<Option<Token>, IpamError> {
-        let row = sqlx::query(
-            "SELECT id, token_hash, name, max_allocations, is_admin, created_at, expires_at, revoked FROM tokens WHERE token_hash = ?",
-        )
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        row.map(|r| self.row_to_token(&r)).transpose()
-    }
-
     /// List all tokens.
     pub async fn list_tokens(&self) -> Result<Vec<Token>, IpamError> {
         let rows = sqlx::query(
@@ -611,14 +563,6 @@ impl Ipam {
         .await?;
 
         rows.iter().map(|r| self.row_to_token(r)).collect()
-    }
-
-    /// Validate a plaintext token and return Token if valid.
-    pub async fn validate_token(&self, token: &str) -> Result<Option<Token>, IpamError> {
-        let token_hash = hash_token(token);
-        let token_opt = self.get_token(&token_hash).await?;
-
-        Ok(token_opt.filter(|t| t.is_valid()))
     }
 
     // Audit logging
@@ -658,6 +602,7 @@ impl Ipam {
             pubkey: row.get("pubkey"),
             endpoint: row.get("endpoint"),
             nft_contract: row.get("nft_contract"),
+            source: row.try_get("source").unwrap_or_else(|_| "evm".to_string()),
             allocated_at: DateTime::parse_from_rfc3339(&allocated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),

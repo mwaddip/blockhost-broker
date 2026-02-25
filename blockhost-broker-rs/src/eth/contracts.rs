@@ -8,9 +8,6 @@ abigen!(
     "contracts/abi/BrokerRequests.json"
 );
 
-// Re-export the generated Request struct
-pub use broker_requests_contract::Request as RequestData;
-
 // Note: The abigen! macro generates a Request struct with fields:
 // - id: U256
 // - requester: Address

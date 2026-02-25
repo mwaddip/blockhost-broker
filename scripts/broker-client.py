@@ -54,6 +54,7 @@ except ImportError as e:
 
 # Default configuration
 DEFAULT_CONFIG_DIR = Path("/etc/blockhost")
+DEFAULT_CHAINS_CONFIG = Path("/etc/blockhost/broker-chains.json")
 DEFAULT_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com"
 DEFAULT_CHAIN_ID = 11155111
 DEFAULT_POLL_INTERVAL = 5  # seconds
@@ -249,6 +250,146 @@ class AllocationResponse:
     broker_pubkey: str
     broker_endpoint: str
     dns_zone: str = ""
+
+
+# ── Chain adapter dispatch ───────────────────────────────────────────
+
+@dataclass
+class ChainAdapter:
+    """Configuration for a blockchain adapter."""
+
+    name: str
+    pattern: re.Pattern
+    adapter: str  # "builtin" for EVM, or command path
+    adapter_args: list  # extra args prepended to the command
+    settings: dict  # chain-specific settings (rpc_url, registry, etc.)
+
+
+def load_chains_config(config_path: Path) -> list[ChainAdapter]:
+    """Load chain adapter configuration from JSON file.
+
+    Format:
+      [
+        {
+          "name": "evm",
+          "match": "^0x[0-9a-fA-F]{40}$",
+          "adapter": "builtin"
+        },
+        {
+          "name": "opnet",
+          "match": "^(0x[0-9a-fA-F]{64}|opr1.+)$",
+          "adapter": "npx",
+          "adapter_args": ["tsx", "/opt/blockhost/client-opnet/src/main.ts", "request"],
+          "rpc_url": "https://regtest.opnet.org",
+          "registry_pubkey": "0x..."
+        }
+      ]
+    """
+    if not config_path.exists():
+        return []
+
+    try:
+        data = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Warning: Could not load chains config {config_path}: {e}", file=sys.stderr)
+        return []
+
+    adapters = []
+    for entry in data:
+        name = entry.get("name", "unknown")
+        match_str = entry.get("match")
+        if not match_str:
+            print(f"Warning: Chain '{name}' has no 'match' pattern, skipping", file=sys.stderr)
+            continue
+        try:
+            pattern = re.compile(match_str)
+        except re.error as e:
+            print(f"Warning: Chain '{name}' has invalid pattern: {e}", file=sys.stderr)
+            continue
+
+        adapter = entry.get("adapter", "builtin")
+        adapter_args = entry.get("adapter_args", [])
+
+        # Everything else is chain-specific settings
+        settings = {k: v for k, v in entry.items()
+                    if k not in ("name", "match", "adapter", "adapter_args")}
+
+        adapters.append(ChainAdapter(
+            name=name,
+            pattern=pattern,
+            adapter=adapter,
+            adapter_args=adapter_args,
+            settings=settings,
+        ))
+
+    return adapters
+
+
+def resolve_chain(nft_contract: str, adapters: list[ChainAdapter]) -> Optional[ChainAdapter]:
+    """Match an NFT contract address to a chain adapter."""
+    for adapter in adapters:
+        if adapter.pattern.match(nft_contract):
+            return adapter
+    return None
+
+
+def request_via_external_adapter(
+    adapter: ChainAdapter,
+    nft_contract: str,
+    wallet_key_path: str,
+    broker_id: Optional[int],
+    timeout: int,
+) -> dict:
+    """Run an external chain adapter as a subprocess and return the allocation JSON.
+
+    The adapter must output a single JSON line to stdout on success.
+    All progress logging goes to stderr (passed through to the user).
+    """
+    cmd = [adapter.adapter] + adapter.adapter_args
+
+    # Map settings to CLI args
+    if "rpc_url" in adapter.settings:
+        cmd += ["--rpc-url", adapter.settings["rpc_url"]]
+    if "registry_pubkey" in adapter.settings:
+        cmd += ["--registry-pubkey", adapter.settings["registry_pubkey"]]
+
+    cmd += ["--nft-pubkey", nft_contract]
+    cmd += ["--timeout", str(timeout)]
+
+    if broker_id is not None:
+        cmd += ["--broker-id", str(broker_id)]
+
+    # Read wallet key — for OPNet this is a mnemonic file
+    wallet_key = Path(wallet_key_path).read_text().strip()
+    cmd += ["--mnemonic", wallet_key]
+
+    print(f"Running {adapter.name} adapter: {cmd[0]} ...")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout + 30,  # give the subprocess a bit more time than its internal timeout
+    )
+
+    # Pass stderr through (adapter's progress logging)
+    if result.stderr:
+        for line in result.stderr.rstrip().split("\n"):
+            print(f"  {line}", file=sys.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{adapter.name} adapter exited with code {result.returncode}"
+        )
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError(f"{adapter.name} adapter produced no output")
+
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"{adapter.name} adapter returned invalid JSON: {e}")
 
 
 @dataclass
@@ -689,6 +830,18 @@ def delete_allocation_config(config_dir: Path) -> bool:
     return False
 
 
+def fetch_broker_config(gateway: str, port: int = 8080, timeout: int = 5) -> Optional[dict]:
+    """Fetch static broker config through the WireGuard tunnel."""
+    url = f"http://[{gateway}]:{port}/v1/config"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"  Warning: Could not fetch broker config: {e}", file=sys.stderr)
+        return None
+
+
 def save_broker_contract(config_dir: Path, contract: BrokerContract) -> None:
     """Save broker contract info for future renewals."""
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -890,8 +1043,104 @@ def _submit_poll_save(
 
 def cmd_request(args: argparse.Namespace) -> int:
     """Handle allocation request command."""
+    config_dir = Path(args.config_dir)
+
+    # Resolve chain adapter from NFT contract address format
+    chains_config = getattr(args, "chains_config", str(DEFAULT_CHAINS_CONFIG))
+    adapters = load_chains_config(Path(chains_config))
+    chain = resolve_chain(args.nft_contract, adapters)
+
+    # Apply chain-level defaults for timeout/poll_interval when the user
+    # didn't explicitly override them on the command line.
+    if chain:
+        if "timeout" in chain.settings and args.timeout == DEFAULT_TIMEOUT:
+            args.timeout = int(chain.settings["timeout"])
+        if "poll_interval" in chain.settings and args.poll_interval == DEFAULT_POLL_INTERVAL:
+            args.poll_interval = int(chain.settings["poll_interval"])
+
+    if chain and chain.adapter != "builtin":
+        return _cmd_request_external(args, chain, config_dir)
+
+    if chain:
+        print(f"Chain: {chain.name} (builtin)")
+
+    return _cmd_request_evm(args, config_dir)
+
+
+def _cmd_request_external(
+    args: argparse.Namespace,
+    chain: ChainAdapter,
+    config_dir: Path,
+) -> int:
+    """Handle request via an external chain adapter subprocess."""
+    print(f"Chain: {chain.name}")
+
+    try:
+        result = request_via_external_adapter(
+            adapter=chain,
+            nft_contract=args.nft_contract,
+            wallet_key_path=args.wallet_key,
+            broker_id=getattr(args, "broker_id", None),
+            timeout=args.timeout,
+        )
+    except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
+        print(f"Adapter error: {e}", file=sys.stderr)
+        return 1
+
+    # Validate required fields
+    required = ["prefix", "gateway", "broker_pubkey", "broker_endpoint",
+                "wg_private_key", "wg_public_key"]
+    for field in required:
+        if field not in result or not result[field]:
+            print(f"Adapter response missing field: {field}", file=sys.stderr)
+            return 1
+
+    # Validate prefix is valid IPv6 CIDR
+    try:
+        ipaddress.IPv6Network(result["prefix"], strict=False)
+    except (ValueError, ipaddress.AddressValueError) as e:
+        print(f"Invalid prefix from adapter: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Allocated prefix: {result['prefix']}")
+    print(f"Gateway: {result['gateway']}")
+    print(f"Broker endpoint: {result['broker_endpoint']}")
+
+    # Save configuration
+    config = AllocationConfig(
+        prefix=result["prefix"],
+        gateway=result["gateway"],
+        broker_pubkey=result["broker_pubkey"],
+        broker_endpoint=result["broker_endpoint"],
+        nft_contract=args.nft_contract,
+        request_id=result.get("request_id", 0),
+        wg_private_key=result["wg_private_key"],
+        wg_public_key=result["wg_public_key"],
+        allocated_at=datetime.now(timezone.utc).isoformat(),
+        dns_zone=result.get("dns_zone", ""),
+    )
+    save_allocation_config(config_dir, config)
+
+    # Configure WireGuard if requested
+    if args.configure_wg:
+        print("Configuring WireGuard tunnel...")
+        configure_wireguard(
+            interface=args.wg_interface,
+            private_key=result["wg_private_key"],
+            prefix=result["prefix"],
+            gateway=result["gateway"],
+            broker_pubkey=result["broker_pubkey"],
+            broker_endpoint=result["broker_endpoint"],
+        )
+
+    print("Allocation complete!")
+    return 0
+
+
+def _cmd_request_evm(args: argparse.Namespace, config_dir: Path) -> int:
+    """Handle request via the builtin EVM path."""
     # Load server key for ECIES operations
-    server_key_file = Path(args.config_dir) / "server.key"
+    server_key_file = config_dir / "server.key"
     if not server_key_file.exists():
         print(f"Server key not found at {server_key_file}", file=sys.stderr)
         print("Run the setup wizard first to generate the server keypair", file=sys.stderr)
@@ -918,8 +1167,6 @@ def cmd_request(args: argparse.Namespace) -> int:
         broker = client.get_broker(args.broker_id)
         print(f"Using broker #{broker.id} in {broker.region}")
     elif args.requests_contract and args.broker_pubkey:
-        # Direct broker specification — operator not known, response scanning
-        # will accept any sender (empty string won't match, so we skip sender filter)
         broker = BrokerInfo(
             id=0,
             operator="",
@@ -935,14 +1182,12 @@ def cmd_request(args: argparse.Namespace) -> int:
             print("No active brokers found", file=sys.stderr)
             return 1
 
-        # Filter by region if specified
         if args.region:
             brokers = [b for b in brokers if b.region == args.region]
             if not brokers:
                 print(f"No brokers found in region {args.region}", file=sys.stderr)
                 return 1
 
-        # Filter by capacity status (0=available, 1=limited, 2=closed)
         available_brokers = []
         for b in brokers:
             try:
@@ -952,7 +1197,6 @@ def cmd_request(args: argparse.Namespace) -> int:
                     continue
                 available_brokers.append((b, cap_status))
             except Exception as e:
-                # If capacity check fails (legacy contract), include the broker anyway
                 print(f"  Broker #{b.id}: capacity check failed ({e}), including", file=sys.stderr)
                 available_brokers.append((b, CAPACITY_AVAILABLE))
 
@@ -960,7 +1204,6 @@ def cmd_request(args: argparse.Namespace) -> int:
             print("No brokers with available capacity", file=sys.stderr)
             return 1
 
-        # Prefer brokers with full availability over limited ones
         available_brokers.sort(key=lambda x: x[1])
         broker = available_brokers[0][0]
         cap_label = {CAPACITY_AVAILABLE: "available", CAPACITY_LIMITED: "limited"}.get(
@@ -968,7 +1211,6 @@ def cmd_request(args: argparse.Namespace) -> int:
         )
         print(f"Selected broker #{broker.id} in {broker.region} ({cap_label})")
 
-    # Check for existing request — note it but always submit fresh (overwrite allowed)
     existing_request_id = client.get_request_id_for_nft(
         broker.requests_contract, args.nft_contract
     )
@@ -981,7 +1223,7 @@ def cmd_request(args: argparse.Namespace) -> int:
         account=account,
         broker=broker,
         nft_contract=args.nft_contract,
-        config_dir=Path(args.config_dir),
+        config_dir=config_dir,
         timeout=args.timeout,
         poll_interval=args.poll_interval,
         configure_wg=args.configure_wg,
@@ -1273,6 +1515,17 @@ PersistentKeepalive = 25
     else:
         print(f"  Warning: Gateway {config.gateway} not reachable", file=sys.stderr)
 
+    # Fetch broker config through the tunnel (dns_zone etc.)
+    broker_config = fetch_broker_config(config.gateway)
+    if broker_config:
+        updated = False
+        if broker_config.get("dns_zone") and not config.dns_zone:
+            config.dns_zone = broker_config["dns_zone"]
+            updated = True
+            print(f"  DNS zone: {config.dns_zone}")
+        if updated:
+            save_allocation_config(Path(args.config_dir), config)
+
     print(f"\nInstallation complete. WireGuard tunnel will persist across reboots.")
     return 0
 
@@ -1336,6 +1589,11 @@ def main() -> int:
         "--config-dir",
         default=str(DEFAULT_CONFIG_DIR),
         help=f"Configuration directory (default: {DEFAULT_CONFIG_DIR})",
+    )
+    parser.add_argument(
+        "--chains-config",
+        default=str(DEFAULT_CHAINS_CONFIG),
+        help=f"Chain adapters config file (default: {DEFAULT_CHAINS_CONFIG})",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)

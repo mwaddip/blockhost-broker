@@ -2,4 +2,4 @@
 
 mod manager;
 
-pub use manager::{PeerStatus, WireGuardError, WireGuardManager};
+pub use manager::{WireGuardError, WireGuardManager};
