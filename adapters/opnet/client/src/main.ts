@@ -334,14 +334,18 @@ async function watchForResponse(
 
         for (let h = lastCheckedBlock + 1n; h <= currentHeight; h++) {
             const block = await provider.getBlock(h, true);
+            const txs = block.transactions;
+            log(`Scanning block ${h}: ${txs.length} txs`);
 
-            for (const tx of block.transactions) {
+            for (const tx of txs) {
                 for (const output of tx.outputs) {
+                    log(`  output: value=${output.value} script=${output.script ? JSON.stringify(output.script.map(x => x instanceof Uint8Array ? '[bytes:'+x.length+']' : x)) : null}`);
                     if (output.value !== 0n) continue;
                     if (!output.script || output.script.length < 2) continue;
                     if (output.script[0] !== opcodes.OP_RETURN) continue;
 
                     const data = output.script[1];
+                    log(`  OP_RETURN found: data type=${data?.constructor?.name} len=${data?.length} data[0]=${data?.[0]}`);
                     if (!(data instanceof Uint8Array)) continue;
                     if (data.length < 2) continue;
                     if (data[0] !== OP_RETURN_VERSION) continue;
@@ -355,8 +359,8 @@ async function watchForResponse(
                         );
                         log(`Response found in block ${h}, tx ${tx.id ?? 'unknown'}`);
                         return deserializeResponse(plaintext);
-                    } catch {
-                        // Not our response — continue scanning
+                    } catch (e) {
+                        log(`  Decrypt failed: ${e}`);
                     }
                 }
             }
