@@ -22,7 +22,7 @@
       ]
     },
     "opnet": {
-      "wallet_pattern": "^(bc1p|tb1p)[a-z0-9]{58}$",
+      "wallet_pattern": "^(bc1p|opt1p)[a-z0-9]{58}$",
       "contract_validation": "^0x[0-9a-fA-F]{64}$",
       "fields": [
         {
