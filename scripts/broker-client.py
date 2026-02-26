@@ -1159,6 +1159,26 @@ def _cmd_request_external(
             broker_endpoint=result["broker_endpoint"],
         )
 
+        # Fetch dns_zone through the tunnel (not in OPNet OP_RETURN payload)
+        if not config.dns_zone:
+            broker_config = fetch_broker_config(result["gateway"])
+            if broker_config and broker_config.get("dns_zone"):
+                config = AllocationConfig(
+                    prefix=config.prefix,
+                    gateway=config.gateway,
+                    broker_pubkey=config.broker_pubkey,
+                    broker_endpoint=config.broker_endpoint,
+                    nft_contract=config.nft_contract,
+                    request_id=config.request_id,
+                    wg_private_key=config.wg_private_key,
+                    wg_public_key=config.wg_public_key,
+                    allocated_at=config.allocated_at,
+                    broker_wallet=config.broker_wallet,
+                    dns_zone=broker_config["dns_zone"],
+                )
+                save_allocation_config(config_dir, config)
+                print(f"DNS zone: {config.dns_zone}")
+
     print("Allocation complete!")
     return 0
 
