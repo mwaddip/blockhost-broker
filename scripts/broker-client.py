@@ -1159,29 +1159,6 @@ def _cmd_request_external(
             broker_endpoint=result["broker_endpoint"],
         )
 
-        # Fetch dns_zone through the tunnel (not in OPNet OP_RETURN payload).
-        # Wait for the tunnel handshake first — wg set adds the peer but the
-        # route isn't usable until the first handshake completes.
-        if not config.dns_zone:
-            import time as _time
-            gateway = result["gateway"]
-            reachable = False
-            for _ in range(12):  # up to 60s
-                r = subprocess.run(
-                    ["ping", "-6", "-c", "1", "-W", "3", gateway],
-                    capture_output=True,
-                )
-                if r.returncode == 0:
-                    reachable = True
-                    break
-                _time.sleep(5)
-            if reachable:
-                broker_config = fetch_broker_config(gateway)
-                if broker_config and broker_config.get("dns_zone"):
-                    import dataclasses
-                    config = dataclasses.replace(config, dns_zone=broker_config["dns_zone"])
-                    save_allocation_config(config_dir, config)
-                    print(f"DNS zone: {config.dns_zone}")
 
     print("Allocation complete!")
     return 0
