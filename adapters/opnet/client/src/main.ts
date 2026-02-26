@@ -326,6 +326,7 @@ async function watchForResponse(
     startBlock: bigint,
     timeoutMs: number,
 ): Promise<{ brokerPubkey: string; brokerEndpoint: string; prefix: string; gateway: string }> {
+    log(`watchForResponse: timeout=${timeoutMs}ms (${timeoutMs/1000}s), startBlock=${startBlock}`);
     const deadline = Date.now() + timeoutMs;
     let lastCheckedBlock = startBlock - 1n;
 
