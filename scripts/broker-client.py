@@ -356,6 +356,7 @@ def request_via_external_adapter(
     broker_id: Optional[int],
     timeout: int,
     server_key_hex: Optional[str] = None,
+    registry_contract: Optional[str] = None,
 ) -> dict:
     """Run an external chain adapter as a subprocess and return the allocation JSON.
 
@@ -367,8 +368,11 @@ def request_via_external_adapter(
     # Map settings to CLI args
     if "rpc_url" in adapter.settings:
         cmd += ["--rpc-url", adapter.settings["rpc_url"]]
-    if "registry_pubkey" in adapter.settings:
-        cmd += ["--registry-pubkey", adapter.settings["registry_pubkey"]]
+
+    # Registry pubkey: prefer explicit arg, fall back to chain config
+    effective_registry = registry_contract or adapter.settings.get("registry_pubkey")
+    if effective_registry:
+        cmd += ["--registry-pubkey", effective_registry]
 
     cmd += ["--nft-pubkey", nft_contract]
     cmd += ["--timeout", str(timeout)]
@@ -1103,6 +1107,7 @@ def _cmd_request_external(
             broker_id=getattr(args, "broker_id", None),
             timeout=args.timeout,
             server_key_hex=ecies_client.private_key_hex,
+            registry_contract=getattr(args, "registry_contract", None),
         )
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
         print(f"Adapter error: {e}", file=sys.stderr)
