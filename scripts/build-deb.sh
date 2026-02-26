@@ -46,6 +46,9 @@ if [ -d "$OPNET_CLIENT/src" ]; then
         (cd "$OPNET_CLIENT" && npm ci --ignore-scripts)
     fi
 
+    # Apply patches (patch-package; skipped by --ignore-scripts above)
+    (cd "$OPNET_CLIENT" && npx patch-package)
+
     # Bundle into a single JS file
     (cd "$OPNET_CLIENT" && npm run build)
     cp "$OPNET_CLIENT/dist/main.js" "$DEST/dist/"
