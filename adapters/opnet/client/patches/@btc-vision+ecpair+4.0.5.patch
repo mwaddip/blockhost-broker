@@ -1,0 +1,13 @@
+diff --git a/node_modules/@btc-vision/ecpair/build/noble.js b/node_modules/@btc-vision/ecpair/build/noble.js
+index f638b1e..b9b284c 100644
+--- a/node_modules/@btc-vision/ecpair/build/noble.js
++++ b/node_modules/@btc-vision/ecpair/build/noble.js
+@@ -125,7 +125,7 @@ export class NobleBackend {
+             prehash: false,
+             lowS: true,
+             extraEntropy: extraEntropy ?? false,
+-        });
++        }).toCompactRawBytes();
+     }
+     /** @inheritDoc */
+     verify(hash, publicKey, signature) {
