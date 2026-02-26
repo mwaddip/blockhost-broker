@@ -333,7 +333,13 @@ async function watchForResponse(
         const currentHeight = await provider.getBlockNumber();
 
         for (let h = lastCheckedBlock + 1n; h <= currentHeight; h++) {
-            const block = await provider.getBlock(h, true);
+            let block;
+            try {
+                block = await provider.getBlock(h, true);
+            } catch (e) {
+                log(`Block ${h} not yet available, will retry: ${e}`);
+                break; // stop advancing lastCheckedBlock; retry this height next cycle
+            }
             const txs = block.transactions;
             log(`Scanning block ${h}: ${txs.length} txs`);
 
