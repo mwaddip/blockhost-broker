@@ -1075,7 +1075,7 @@ def cmd_request(args: argparse.Namespace) -> int:
     # Apply chain-level defaults for timeout/poll_interval when the user
     # didn't explicitly override them on the command line.
     if chain:
-        if "timeout" in chain.settings and args.timeout == DEFAULT_TIMEOUT:
+        if "timeout" in chain.settings and int(chain.settings["timeout"]) > args.timeout:
             args.timeout = int(chain.settings["timeout"])
         if "poll_interval" in chain.settings and args.poll_interval == DEFAULT_POLL_INTERVAL:
             args.poll_interval = int(chain.settings["poll_interval"])
