@@ -11,6 +11,7 @@
     "match": "^(0x[0-9a-fA-F]{64}|opr1.+)$",
     "adapter": "node",
     "adapter_args": ["/opt/blockhost/adapters/opnet/client/dist/main.js", "request"],
-    "timeout": 2400
+    "timeout": 2400,
+    "rpc_url": "https://testnet.opnet.org"
   }
 ]
