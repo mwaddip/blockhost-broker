@@ -22,7 +22,7 @@ export interface AdapterConfig {
 }
 
 export function loadConfig(): AdapterConfig {
-    const rpcUrl = requireEnv('OPNET_RPC_URL', 'https://regtest.opnet.org');
+    const rpcUrl = requireEnv('OPNET_RPC_URL', 'https://testnet.opnet.org');
     const networkName = rpcUrl.includes('mainnet')
         ? 'mainnet'
         : rpcUrl.includes('testnet')

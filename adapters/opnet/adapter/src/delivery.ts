@@ -5,20 +5,21 @@
  * the encrypted allocation response. The client finds it by attempting
  * decryption — AES-GCM tag verification serves as authentication.
  *
- * OP_RETURN layout (72 bytes):
+ * OP_RETURN layout (80 bytes):
  *   [1 byte  version]
- *   [71 bytes encrypted payload]
+ *   [79 bytes encrypted payload]
  *
- * Encrypted payload (71 bytes):
- *   AES-256-GCM ciphertext (55 bytes) + tag (16 bytes)
+ * Encrypted payload (79 bytes):
+ *   AES-256-GCM ciphertext (63 bytes) + tag (16 bytes)
  *   IV is derived deterministically from the ECDH shared secret.
  *
- * Plaintext layout (55 bytes):
+ * Plaintext layout (63 bytes):
  *   [32 bytes broker WireGuard pubkey]
  *   [4  bytes broker endpoint IPv4]
  *   [2  bytes broker endpoint port BE]
  *   [1  byte  prefix mask length]
  *   [16 bytes prefix network (IPv6)]
+ *   [8  bytes gateway host part (lower 64 bits of gateway IPv6)]
  *
  * The client establishes the tunnel with this data, then fetches
  * remaining config (dnsZone, etc.) over the tunnel.
@@ -49,7 +50,7 @@ const AES_IV_LEN = 12;
 
 /** Serialize only the fields needed for tunnel establishment. */
 export function serializeResponse(resp: ResponsePayload): Uint8Array {
-    const buf = new Uint8Array(55);
+    const buf = new Uint8Array(63);
     let offset = 0;
 
     // WireGuard public key (base64 → 32 raw bytes)
@@ -86,6 +87,11 @@ export function serializeResponse(resp: ResponsePayload): Uint8Array {
     const prefixAddr = resp.prefix.slice(0, slashIdx);
     const ipv6Bytes = ipv6ToBytes(prefixAddr);
     buf.set(ipv6Bytes, offset);
+    offset += 16;
+
+    // Gateway host part (lower 64 bits of gateway IPv6, 8 bytes)
+    const gwBytes = ipv6ToBytes(resp.gateway);
+    buf.set(gwBytes.slice(8, 16), offset);
 
     return buf;
 }

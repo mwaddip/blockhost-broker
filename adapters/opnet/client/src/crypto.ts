@@ -100,12 +100,12 @@ export interface TunnelConfig {
     brokerPubkey: string; // base64
     brokerEndpoint: string; // ip:port
     prefix: string; // CIDR
-    gateway: string; // prefix::1
+    gateway: string; // broker WireGuard address (upstream::2)
 }
 
 export function deserializeResponse(data: Uint8Array): TunnelConfig {
-    if (data.length !== 55) {
-        throw new Error(`Invalid response length: ${data.length} (expected 55)`);
+    if (data.length !== 63) {
+        throw new Error(`Invalid response length: ${data.length} (expected 63)`);
     }
 
     let offset = 0;
@@ -121,15 +121,22 @@ export function deserializeResponse(data: Uint8Array): TunnelConfig {
 
     const mask = data[offset++];
 
-    // Reconstruct IPv6
-    const parts: string[] = [];
+    // Reconstruct prefix IPv6 (16 bytes)
+    const prefixParts: string[] = [];
     for (let i = 0; i < 8; i++) {
         const val = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
-        parts.push(val.toString(16));
+        prefixParts.push(val.toString(16));
     }
-    // Compress IPv6 (collapse longest run of :0: to ::)
-    const prefix = compressIPv6(parts.join(':'));
-    const gateway = deriveGateway(prefix);
+    const prefix = compressIPv6(prefixParts.join(':'));
+    offset += 16;
+
+    // Reconstruct gateway: upper 64 bits from prefix, lower 64 bits from payload
+    const gwParts = prefixParts.slice(0, 4);
+    for (let i = 0; i < 4; i++) {
+        const val = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
+        gwParts.push(val.toString(16));
+    }
+    const gateway = compressIPv6(gwParts.join(':'));
 
     return {
         brokerPubkey: wgKey,
@@ -139,33 +146,6 @@ export function deserializeResponse(data: Uint8Array): TunnelConfig {
     };
 }
 
-function deriveGateway(prefixAddr: string): string {
-    // Gateway is always prefix::1
-    // Take the prefix, zero out the host part, add ::1
-    const expanded = expandIPv6(prefixAddr);
-    const parts = expanded.split(':');
-    // Set the last group to 1, rest of host to 0
-    // For a /120 within a /64, groups 4-7 are host.
-    // But we just need prefix::1 which means last group = 1
-    parts[7] = '1';
-    return compressIPv6(parts.join(':'));
-}
-
-function expandIPv6(addr: string): string {
-    if (addr.includes('::')) {
-        const [left, right] = addr.split('::');
-        const leftParts = left ? left.split(':') : [];
-        const rightParts = right ? right.split(':') : [];
-        const missing = 8 - leftParts.length - rightParts.length;
-        const middle = Array(missing).fill('0000');
-        const all = [...leftParts, ...middle, ...rightParts];
-        return all.map((p) => p.padStart(4, '0')).join(':');
-    }
-    return addr
-        .split(':')
-        .map((p) => p.padStart(4, '0'))
-        .join(':');
-}
 
 function compressIPv6(addr: string): string {
     const parts = addr.split(':').map((p) => p.replace(/^0+/, '') || '0');

@@ -409,18 +409,18 @@ Unlike the EVM monitor (built into the broker daemon), the OPNet adapter is a se
 
 The response is delivered as a Bitcoin transaction with an OP_RETURN output. The client finds it by attempting decryption — AES-GCM tag verification serves as authentication.
 
-**OP_RETURN layout (72 bytes):**
+**OP_RETURN layout (80 bytes):**
 
 ```
 [1 byte  version (0x01)]
-[71 bytes encrypted payload]
+[79 bytes encrypted payload]
 ```
 
-**Encrypted payload (71 bytes):**
+**Encrypted payload (79 bytes):**
 
-AES-256-GCM ciphertext (55 bytes) + authentication tag (16 bytes).
+AES-256-GCM ciphertext (63 bytes) + authentication tag (16 bytes).
 
-**Plaintext layout (55 bytes):**
+**Plaintext layout (63 bytes):**
 
 | Offset | Size | Field |
 |--------|------|-------|
@@ -429,6 +429,7 @@ AES-256-GCM ciphertext (55 bytes) + authentication tag (16 bytes).
 | 36 | 2 | Broker endpoint port (big-endian) |
 | 38 | 1 | Prefix mask length (e.g. 120) |
 | 39 | 16 | Prefix network address (IPv6, 16 bytes) |
+| 55 | 8 | Gateway host part (lower 64 bits of gateway IPv6) |
 
 ### Compact Encryption
 

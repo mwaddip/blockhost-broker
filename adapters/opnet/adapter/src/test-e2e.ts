@@ -18,8 +18,8 @@ import type { ResponsePayload } from './crypto.js';
 
 // ── Config from env ─────────────────────────────────────────────────
 
-const RPC_URL = process.env.OPNET_RPC_URL ?? 'https://regtest.opnet.org';
-const network = networks.regtest;
+const RPC_URL = process.env.OPNET_RPC_URL ?? 'https://testnet.opnet.org';
+const network = networks.opnetTestnet;
 const REQUESTS_PUBKEY = process.env.OPNET_BROKER_REQUESTS_PUBKEY!;
 const OPERATOR_MNEMONIC = process.env.OPNET_OPERATOR_MNEMONIC!;
 const ECIES_KEY = process.env.BROKER_ECIES_PRIVATE_KEY!;
@@ -34,7 +34,7 @@ if (!REQUESTS_PUBKEY || !OPERATOR_MNEMONIC || !ECIES_KEY) {
 
 const MOCK_RESPONSE: ResponsePayload = {
     prefix: '2a11:6c7:f04:276::100/120',
-    gateway: '2a11:6c7:f04:276::1',
+    gateway: '2a11:6c7:f04:276::2',
     brokerPubkey: 'dGVzdC13Zy1wdWJrZXktMzItYnl0ZXMtcGFkWFhYWFg=', // 32 bytes base64 (test key)
     brokerEndpoint: '95.179.128.177:51820',
 };
