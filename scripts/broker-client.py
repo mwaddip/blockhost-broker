@@ -1159,6 +1159,31 @@ def _cmd_request_external(
             broker_endpoint=result["broker_endpoint"],
         )
 
+        # Wait for tunnel to come up, then fetch broker config (dns_zone etc.)
+        print("Waiting for tunnel...")
+        gateway = result["gateway"]
+        tunnel_up = False
+        for attempt in range(6):
+            ping = subprocess.run(
+                ["ping", "-6", "-c", "1", "-W", "3", gateway],
+                capture_output=True,
+            )
+            if ping.returncode == 0:
+                print(f"  Gateway {gateway} reachable")
+                tunnel_up = True
+                break
+            if attempt < 5:
+                time.sleep(2)
+        if not tunnel_up:
+            print(f"Error: Gateway {gateway} not reachable — tunnel failed to come up", file=sys.stderr)
+            return 1
+
+        broker_config = fetch_broker_config(gateway)
+        if broker_config:
+            if broker_config.get("dns_zone") and not config.dns_zone:
+                config.dns_zone = broker_config["dns_zone"]
+                save_allocation_config(config_dir, config)
+                print(f"  DNS zone: {config.dns_zone}")
 
     print("Allocation complete!")
     return 0
@@ -1513,16 +1538,23 @@ PersistentKeepalive = 25
     else:
         print(f"  Warning: Could not enable service: {result.stderr}", file=sys.stderr)
 
-    # Verify connectivity
-    print("\nVerifying connectivity...")
-    result = subprocess.run(
-        ["ping", "-6", "-c", "1", "-W", "5", config.gateway],
-        capture_output=True,
-    )
-    if result.returncode == 0:
-        print(f"  Gateway {config.gateway} reachable")
-    else:
-        print(f"  Warning: Gateway {config.gateway} not reachable", file=sys.stderr)
+    # Wait for tunnel connectivity
+    print("\nWaiting for tunnel...")
+    tunnel_up = False
+    for attempt in range(6):
+        result = subprocess.run(
+            ["ping", "-6", "-c", "1", "-W", "3", config.gateway],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            print(f"  Gateway {config.gateway} reachable")
+            tunnel_up = True
+            break
+        if attempt < 5:
+            time.sleep(2)
+    if not tunnel_up:
+        print(f"Error: Gateway {config.gateway} not reachable — tunnel failed to come up", file=sys.stderr)
+        return 1
 
     # Fetch broker config through the tunnel (dns_zone etc.)
     broker_config = fetch_broker_config(config.gateway)
