@@ -12,8 +12,8 @@
         "@btc-vision/bitcoin": "^7.0.0",
         "@btc-vision/transaction": "^1.8.2",
         "@noble/ciphers": "^2.1.1",
-        "@noble/curves": "^1.9.7",
-        "@noble/hashes": "^1.8.0",
+        "@noble/curves": "^2.0.1",
+        "@noble/hashes": "^2.0.1",
         "opnet": "^1.8.5"
     },
     "devDependencies": {
