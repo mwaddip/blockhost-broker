@@ -1,0 +1,11 @@
+{
+    "extends": "@btc-vision/opnet-transform/std/assembly.json",
+    "compilerOptions": {
+        "outDir": "./build"
+    },
+    "include": [
+        "assembly/**/*.ts",
+        "node_modules/@btc-vision/btc-runtime/runtime/**/*.ts",
+        "node_modules/@btc-vision/as-bignum/assembly/**/*.ts"
+    ]
+}

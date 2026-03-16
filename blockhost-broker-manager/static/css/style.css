@@ -364,6 +364,16 @@ body {
     border-radius: 0.25rem;
 }
 
+.copyable {
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.copyable:hover {
+    background-color: var(--color-primary) !important;
+    color: white;
+}
+
 .truncate {
     max-width: 200px;
     overflow: hidden;
@@ -393,6 +403,26 @@ body {
 .badge-test {
     background-color: rgba(255, 173, 31, 0.15);
     color: var(--color-warning);
+}
+
+.badge-evm {
+    background-color: rgba(29, 155, 240, 0.15);
+    color: var(--color-primary);
+}
+
+.badge-btc {
+    background-color: rgba(247, 147, 26, 0.15);
+    color: #f7931a;
+}
+
+.badge-source {
+    background-color: var(--color-bg);
+    color: var(--color-text-secondary);
+    font-size: 0.625rem;
+}
+
+.section-btc {
+    margin-top: 1.5rem;
 }
 
 /* Modal */

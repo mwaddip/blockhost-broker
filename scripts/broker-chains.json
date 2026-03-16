@@ -1,0 +1,17 @@
+[
+  {
+    "name": "evm",
+    "match": "^0x[0-9a-fA-F]{40}$",
+    "adapter": "builtin",
+    "timeout": 300,
+    "poll_interval": 5
+  },
+  {
+    "name": "opnet",
+    "match": "^(0x[0-9a-fA-F]{64}|opr1.+)$",
+    "adapter": "node",
+    "adapter_args": ["/opt/blockhost/adapters/opnet/client/dist/main.js", "request"],
+    "timeout": 2400,
+    "rpc_url": "https://testnet.opnet.org"
+  }
+]

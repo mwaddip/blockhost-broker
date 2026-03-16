@@ -1,24 +1,12 @@
 //! NFT ownership verification for on-chain authentication.
 
 use ethers::prelude::*;
-use thiserror::Error;
 use tracing::warn;
-
-#[derive(Debug, Error)]
-pub enum VerifierError {
-    #[error("Contract call failed: {0}")]
-    ContractError(#[from] ContractError<Provider<Http>>),
-
-    #[error("Provider error: {0}")]
-    ProviderError(#[from] ProviderError),
-}
 
 /// Result of NFT contract verification.
 #[derive(Debug, Clone)]
 pub struct VerificationResult {
     pub valid: bool,
-    pub nft_contract: Address,
-    pub requester: Address,
     pub error: Option<String>,
 }
 
@@ -65,8 +53,6 @@ impl NftVerifier {
         if !self.contract_exists(nft_contract).await {
             return VerificationResult {
                 valid: false,
-                nft_contract,
-                requester,
                 error: Some("NFT contract does not exist".to_string()),
             };
         }
@@ -75,8 +61,6 @@ impl NftVerifier {
         if !self.is_erc721(nft_contract).await {
             return VerificationResult {
                 valid: false,
-                nft_contract,
-                requester,
                 error: Some("Contract does not support ERC721 interface".to_string()),
             };
         }
@@ -85,16 +69,12 @@ impl NftVerifier {
         if !self.is_owner(nft_contract, requester).await {
             return VerificationResult {
                 valid: false,
-                nft_contract,
-                requester,
                 error: Some("Requester does not own the NFT contract".to_string()),
             };
         }
 
         VerificationResult {
             valid: true,
-            nft_contract,
-            requester,
             error: None,
         }
     }

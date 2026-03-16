@@ -1,0 +1,16 @@
+{
+    "name": "broker-requests",
+    "version": "1.0.0",
+    "scripts": {
+        "build": "asc assembly/index.ts --config asconfig.json --target release --measure --uncheckedBehavior never"
+    },
+    "dependencies": {
+        "@assemblyscript/loader": "^0.28.9",
+        "@btc-vision/as-bignum": "^0.1.2",
+        "@btc-vision/btc-runtime": "^1.11.0-rc.9"
+    },
+    "devDependencies": {
+        "@btc-vision/assemblyscript": "^0.29.2",
+        "@btc-vision/opnet-transform": "^1.2.0"
+    }
+}

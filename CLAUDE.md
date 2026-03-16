@@ -14,12 +14,18 @@ See `SPECIAL.md` for full stat definitions and the priority allocation model.
 
 ## Environment Setup
 
-Environment variables should be in `~/projects/sharedenv/blockhost.env` (not committed):
+EVM environment variables in `~/projects/sharedenv/blockhost.env` (not committed):
 - `DEPLOYER_PRIVATE_KEY` - Wallet private key for deployments (registry owner)
 - `OPERATOR_PRIVATE_KEY` - Operator wallet private key (BrokerRequests owner)
 - `BLOCKHOST_NFT` - AccessCredentialNFT contract address
 - `BLOCKHOST_CONTRACT` - Main Blockhost contract address
 - `RPC_URL` - Sepolia RPC endpoint
+
+OPNet environment variables in `~/projects/sharedenv/opnet-regtest.env` (not committed):
+- `OPNET_RPC_URL` - OPNet JSON-RPC URL
+- `OPNET_BROKER_REQUESTS_PUBKEY` - BrokerRequests contract tweaked pubkey
+- `OPNET_OPERATOR_MNEMONIC` - Operator mnemonic
+- `BROKER_ECIES_PRIVATE_KEY` - ECIES private key (hex)
 
 ## Deployed Contracts (Sepolia Testnet)
 
@@ -50,14 +56,19 @@ Test registry config fetched from: https://raw.githubusercontent.com/mwaddip/blo
 cd blockhost-broker-rs
 cargo build --release
 
-# Deploy to server
+# Deploy broker to server
 scp target/release/blockhost-broker linuxuser@95.179.128.177:/tmp/
 ssh linuxuser@95.179.128.177 'sudo mv /tmp/blockhost-broker /usr/bin/ && sudo systemctl restart blockhost-broker'
 
-# Deploy V2 contracts (Foundry)
+# Deploy V3 EVM contracts (Foundry)
 cd contracts-foundry
 forge build && forge test
 forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
+
+# Build and deploy OPNet adapter
+cd adapters/opnet/adapter && npm run build
+scp dist/main.js linuxuser@95.179.128.177:/tmp/adapter-main.js
+ssh linuxuser@95.179.128.177 'sudo cp /tmp/adapter-main.js /opt/blockhost/adapters/opnet/adapter/dist/main.js && sudo systemctl restart blockhost-opnet-adapter@regtest'
 
 # Run client (on Proxmox server)
 broker-client request --nft-contract 0x... --wallet-key /path/to/key
@@ -83,31 +94,46 @@ Verify the service is healthy after deploy with `sudo systemctl status blockhost
 **Whenever the broker daemon or smart contracts are updated, the broker-client must be tested and updated if necessary.**
 
 Components that must stay in sync:
-- `scripts/broker-client.py` - Client ABI definitions must match deployed contracts
-- `blockhost-broker-rs/src/eth/contracts.rs` - Rust broker ABI must match contracts (uses JSON ABI file)
-- `blockhost-broker-rs/contracts/abi/*.json` - JSON ABI files for contract bindings
-- `contracts-foundry/src/` - Solidity contract source (canonical)
-- `registry.json` - Must point to the active BrokerRegistry address
-- `registry-testnet.json` - Must point to the test BrokerRegistry address
+- `scripts/broker-client.py` - Client ABI definitions must match deployed EVM contracts
+- `blockhost-broker-rs/src/eth/contracts.rs` - Rust broker ABI must match EVM contracts (uses JSON ABI file)
+- `blockhost-broker-rs/contracts/abi/*.json` - JSON ABI files for EVM contract bindings
+- `contracts-foundry/src/` - EVM Solidity contract source (canonical)
+- `adapters/opnet/contracts/` - OPNet AssemblyScript contract source
+- `adapters/opnet/adapter/src/contract.ts` - Adapter's typed wrapper must match OPNet contracts
+- `adapters/opnet/client/src/` - Client must match OPNet contracts + OP_RETURN format
+- `registry.json` - Must point to the active EVM BrokerRegistry address
+- `registry-testnet.json` - Must point to the test EVM BrokerRegistry address
+- `registry-opnet-regtest.json` - Must point to the OPNet regtest BrokerRegistry address
+- `scripts/broker-chains.json` - Chain dispatch config shipped by client .deb
 
 Common breaking changes to watch for:
-- Contract function signature changes
-- Struct return types (must use tuple format in ABI)
+- Contract function signature changes (EVM or OPNet)
+- Struct return types (must use tuple format in EVM ABI)
+- OP_RETURN binary format changes (adapter + client must match)
 - New/removed status codes
 
 ## Project Structure
 
 ```
 blockhost-broker/
-├── blockhost-broker-rs/       # Rust broker daemon
-├── blockhost-broker-manager/  # Web management interface (Python/Flask)
+├── adapters/
+│   └── opnet/
+│       ├── adapter/              # OPNet adapter (polls contract → POST /v1/allocations → OP_RETURN)
+│       ├── client/               # OPNet client (submit request → watch OP_RETURN → JSON stdout)
+│       └── contracts/            # OPNet AssemblyScript contracts + deploy scripts
+├── blockhost-broker-rs/          # Rust broker daemon
+├── blockhost-broker-manager/     # Web management interface (Python/Flask)
+├── contracts-foundry/            # EVM Solidity contracts (Foundry)
 ├── scripts/
-│   ├── broker-client.py       # Client for Proxmox servers
-│   └── build-deb.sh           # Client .deb builder
-├── contracts/                 # Solidity sources
-├── contracts-foundry/         # Foundry project for deployment
-├── registry.json              # Remote config for registry address
-└── registry-testnet.json      # Remote config for test registry address
+│   ├── broker-client.py          # Client for Proxmox servers (chain dispatch)
+│   ├── build-deb.sh              # Client .deb builder
+│   ├── broker-chains.json        # Chain config shipped by .deb (EVM + OPNet)
+│   └── broker-chains.json.example
+├── facts/                        # Interface contracts submodule (READ-ONLY)
+├── BROKER_INTERFACE.md           # Authoritative broker interface specification
+├── registry.json                 # EVM production registry config
+├── registry-testnet.json         # EVM test registry config
+└── registry-opnet-regtest.json   # OPNet regtest registry config
 ```
 
 ## Interface Contract (REFERENCE — READ-ONLY)
@@ -127,4 +153,13 @@ Interface contracts live in the `facts/` submodule (`blockhost-facts` repo) — 
 
 ## Architecture
 
-See DESIGN.md for the on-chain authentication flow.
+See DESIGN.md for architecture overview and design decisions.
+See BROKER_INTERFACE.md for detailed API schemas, database schema, config reference, and binary formats.
+
+### Multichain
+
+- EVM path is built into the Rust daemon (`blockhost-broker-rs/src/eth/`)
+- Additional chains use external adapter processes that POST to `http://127.0.0.1:8080/v1/allocations`
+- Each adapter is a long-running process with chain-specific tooling (Node.js for OPNet)
+- Adapter owns: contract polling, encryption/decryption, response delivery
+- Broker core owns: IPAM, WireGuard, DNS, SQLite, allocation lifecycle

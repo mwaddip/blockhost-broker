@@ -1,0 +1,24 @@
+{
+    "targets": {
+        "release": {
+            "outFile": "build/BrokerRequests.wasm",
+            "textFile": "build/BrokerRequests.wat"
+        }
+    },
+    "options": {
+        "transform": "@btc-vision/opnet-transform",
+        "sourceMap": false,
+        "optimizeLevel": 3,
+        "shrinkLevel": 2,
+        "converge": false,
+        "noAssert": false,
+        "runtime": "stub",
+        "exportRuntime": true,
+        "exportStart": "start",
+        "memoryBase": 0,
+        "initialMemory": 1,
+        "use": [
+            "abort=assembly/index/abort"
+        ]
+    }
+}

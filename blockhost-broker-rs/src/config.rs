@@ -1,6 +1,6 @@
 //! Configuration management for blockhost-broker.
 
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::Ipv6Addr;
 use std::path::PathBuf;
 
 use ipnet::Ipv6Net;
@@ -133,6 +133,7 @@ impl BrokerConfig {
 
     /// Calculate the theoretical maximum number of allocations from prefix math.
     /// Used internally by IPAM for index ceiling — NOT for on-chain capacity.
+    #[cfg(test)]
     pub fn theoretical_max_allocations(&self) -> u64 {
         let upstream_bits = 128 - self.upstream_prefix.prefix_len();
         let alloc_bits = 128 - self.allocation_size;
@@ -194,14 +195,6 @@ impl Default for ApiConfig {
             listen_host: "0.0.0.0".to_string(),
             listen_port: 8080,
         }
-    }
-}
-
-impl ApiConfig {
-    pub fn socket_addr(&self) -> Result<SocketAddr, ConfigError> {
-        format!("{}:{}", self.listen_host, self.listen_port)
-            .parse()
-            .map_err(|_| ConfigError::ValidationError("Invalid listen address".to_string()))
     }
 }
 

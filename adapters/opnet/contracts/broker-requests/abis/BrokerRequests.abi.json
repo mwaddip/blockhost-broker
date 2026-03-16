@@ -1,0 +1,141 @@
+{
+    "functions": [
+        {
+            "name": "submitRequest",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "nftContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "encryptedPayload",
+                    "type": "STRING"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "requestId",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "setCapacityStatus",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "status",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": []
+        },
+        {
+            "name": "getRequest",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "requestId",
+                    "type": "UINT256"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "id",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "requester",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "nftContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "encryptedPayload",
+                    "type": "STRING"
+                },
+                {
+                    "name": "submittedAt",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "getRequestCount",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "count",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "getRequestIdByNftContract",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [
+                {
+                    "name": "nftContract",
+                    "type": "ADDRESS"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "requestId",
+                    "type": "UINT256"
+                }
+            ]
+        },
+        {
+            "name": "getCapacityStatus",
+            "type": "Function",
+            "payable": false,
+            "onlyOwner": false,
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "status",
+                    "type": "UINT256"
+                }
+            ]
+        }
+    ],
+    "events": [
+        {
+            "name": "RequestSubmitted",
+            "values": [
+                {
+                    "name": "requestId",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "requester",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "nftContract",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "encryptedPayload",
+                    "type": "STRING"
+                }
+            ],
+            "type": "Event"
+        }
+    ]
+}

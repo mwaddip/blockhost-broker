@@ -13,6 +13,7 @@ pub struct Allocation {
     pub pubkey: String,
     pub endpoint: Option<String>,
     pub nft_contract: String,
+    pub source: String,
     pub allocated_at: DateTime<Utc>,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub is_test: bool,
@@ -32,17 +33,3 @@ pub struct Token {
     pub revoked: bool,
 }
 
-impl Token {
-    /// Check if the token is valid (not revoked and not expired).
-    pub fn is_valid(&self) -> bool {
-        if self.revoked {
-            return false;
-        }
-        if let Some(expires_at) = self.expires_at {
-            if expires_at < Utc::now() {
-                return false;
-            }
-        }
-        true
-    }
-}

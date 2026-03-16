@@ -78,6 +78,7 @@ def get_broker_manager() -> BrokerManager:
             broker_config = {}
 
         onchain = broker_config.get("onchain", {})
+        opnet = broker_config.get("opnet", {})
 
         _broker_manager = BrokerManager(
             db_path=BROKER_DATA_DIR / "ipam.db",
@@ -87,6 +88,9 @@ def get_broker_manager() -> BrokerManager:
             rpc_url=onchain.get("rpc_url", "https://ethereum-sepolia-rpc.publicnode.com"),
             chain_id=onchain.get("chain_id", 11155111),
             wg_interface=broker_config.get("wireguard", {}).get("interface", "wg-broker"),
+            opnet_rpc_url=opnet.get("rpc_url"),
+            opnet_operator_address=opnet.get("operator_address"),
+            opnet_network=opnet.get("network_name", "OPNet Testnet"),
         )
     return _broker_manager
 
@@ -150,14 +154,19 @@ def dashboard():
     broker = get_broker_manager()
     leases = broker.get_leases()
     wallet_info = broker.get_wallet_info()
+    btc_wallet_info = broker.get_btc_wallet_info()
     active_leases = [l for l in leases if not l.is_test]
     test_leases = [l for l in leases if l.is_test]
+    evm_leases = [l for l in active_leases if l.source == "evm"]
+    btc_leases = [l for l in active_leases if l.source != "evm"]
     return render_template(
         "dashboard.html",
-        leases=active_leases,
+        evm_leases=evm_leases,
+        btc_leases=btc_leases,
         test_leases=test_leases,
         wallet_address=request.wallet_address,
         wallet_info=wallet_info,
+        btc_wallet_info=btc_wallet_info,
     )
 
 
