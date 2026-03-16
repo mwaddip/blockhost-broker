@@ -43,6 +43,8 @@ import {
     serverKeypairFromHex,
     serializeRequestPayload,
 } from './crypto.js';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 // ── Logging (all to stderr) ─────────────────────────────────────────
 
@@ -183,6 +185,86 @@ interface IBrokerRequests extends IOP_NETContract {
 
 const OP_RETURN_VERSION = 0x01;
 const RESPONSE_POLL_MS = 15_000;
+const RECOVERY_FILE = '/var/lib/blockhost/opnet-recovery.json';
+
+interface RecoveryState {
+    serverPrivkeyHex: string;
+    brokerPubkeyHex: string;      // uncompressed, hex
+    startBlock: string;           // bigint as string
+    wgPrivateKeyBase64: string;
+    wgPublicKeyBase64: string;
+    savedAt: string;
+}
+
+// ── Recovery ────────────────────────────────────────────────────────
+
+function saveRecoveryState(
+    serverKeys: { privateKey: Uint8Array },
+    brokerPubUncompressed: Uint8Array,
+    startBlock: bigint,
+    wgKeys: { privateKeyBase64: string; publicKeyBase64: string },
+): void {
+    const state: RecoveryState = {
+        serverPrivkeyHex: Buffer.from(serverKeys.privateKey).toString('hex'),
+        brokerPubkeyHex: Buffer.from(brokerPubUncompressed).toString('hex'),
+        startBlock: startBlock.toString(),
+        wgPrivateKeyBase64: wgKeys.privateKeyBase64,
+        wgPublicKeyBase64: wgKeys.publicKeyBase64,
+        savedAt: new Date().toISOString(),
+    };
+    mkdirSync(dirname(RECOVERY_FILE), { recursive: true });
+    writeFileSync(RECOVERY_FILE, JSON.stringify(state, null, 2));
+    log(`Recovery state saved to ${RECOVERY_FILE}`);
+}
+
+function loadRecoveryState(): RecoveryState | null {
+    if (!existsSync(RECOVERY_FILE)) return null;
+    try {
+        return JSON.parse(readFileSync(RECOVERY_FILE, 'utf-8'));
+    } catch {
+        return null;
+    }
+}
+
+function clearRecoveryState(): void {
+    try {
+        if (existsSync(RECOVERY_FILE)) {
+            unlinkSync(RECOVERY_FILE);
+            log('Recovery state cleared');
+        }
+    } catch { /* ignore */ }
+}
+
+async function attemptRecovery(
+    provider: JSONRpcProvider,
+    state: RecoveryState,
+    timeoutMs: number,
+): Promise<{ brokerPubkey: string; brokerEndpoint: string; prefix: string; gateway: string; wgPrivateKeyBase64: string; wgPublicKeyBase64: string } | null> {
+    log(`Attempting recovery from block ${state.startBlock} (saved ${state.savedAt})`);
+
+    const serverPrivkey = Uint8Array.from(Buffer.from(state.serverPrivkeyHex, 'hex'));
+    const brokerPub = Uint8Array.from(Buffer.from(state.brokerPubkeyHex, 'hex'));
+    const startBlock = BigInt(state.startBlock);
+
+    try {
+        const config = await watchForResponse(
+            provider,
+            serverPrivkey,
+            brokerPub,
+            startBlock,
+            timeoutMs,
+        );
+        clearRecoveryState();
+        return {
+            ...config,
+            wgPrivateKeyBase64: state.wgPrivateKeyBase64,
+            wgPublicKeyBase64: state.wgPublicKeyBase64,
+        };
+    } catch {
+        log('Recovery scan found no response');
+        return null;
+    }
+}
 
 // ── Request command ─────────────────────────────────────────────────
 
@@ -194,6 +276,32 @@ async function cmdRequest(args: Args): Promise<void> {
           : networks.regtest;
 
     const provider = new JSONRpcProvider({ url: args.rpcUrl, network });
+
+    // Check for recovery state from a previous timed-out attempt
+    const recovery = loadRecoveryState();
+    if (recovery) {
+        log('Found recovery state from previous attempt');
+        // Quick scan: use a short timeout to check all blocks since the last attempt
+        const RECOVERY_TIMEOUT_MS = 60_000;
+        const recovered = await attemptRecovery(provider, recovery, RECOVERY_TIMEOUT_MS);
+        if (recovered) {
+            log('Recovered allocation from previous attempt!');
+            const result = {
+                prefix: recovered.prefix,
+                gateway: recovered.gateway,
+                broker_pubkey: recovered.brokerPubkey,
+                broker_endpoint: recovered.brokerEndpoint,
+                wg_private_key: recovered.wgPrivateKeyBase64,
+                wg_public_key: recovered.wgPublicKeyBase64,
+            };
+            process.stdout.write(JSON.stringify(result) + '\n');
+            await provider.close();
+            return;
+        }
+        // No response found — clear stale state and proceed with a fresh request
+        clearRecoveryState();
+        log('Proceeding with fresh request');
+    }
 
     // Derive client wallet
     const mnemonic = new Mnemonic(args.mnemonic, '', network, MLDSASecurityLevel.LEVEL2);
@@ -294,30 +402,54 @@ async function cmdRequest(args: Args): Promise<void> {
     const startBlock = await provider.getBlockNumber();
     log(`Watching for response from block ${startBlock}...`);
 
-    const config = await watchForResponse(
-        provider,
-        serverKeys.privateKey,
-        brokerPubUncompressed,
-        startBlock,
-        args.timeoutMs,
-    );
+    // Save recovery state so a retry can find the response if we time out
+    saveRecoveryState(serverKeys, brokerPubUncompressed, startBlock, wgKeys);
 
-    // 7. Output result as JSON to stdout
-    const result = {
-        prefix: config.prefix,
-        gateway: config.gateway,
-        broker_pubkey: config.brokerPubkey,
-        broker_endpoint: config.brokerEndpoint,
-        wg_private_key: wgKeys.privateKeyBase64,
-        wg_public_key: wgKeys.publicKeyBase64,
-    };
+    try {
+        const config = await watchForResponse(
+            provider,
+            serverKeys.privateKey,
+            brokerPubUncompressed,
+            startBlock,
+            args.timeoutMs,
+        );
 
-    process.stdout.write(JSON.stringify(result) + '\n');
+        clearRecoveryState();
+
+        // 7. Output result as JSON to stdout
+        const result = {
+            prefix: config.prefix,
+            gateway: config.gateway,
+            broker_pubkey: config.brokerPubkey,
+            broker_endpoint: config.brokerEndpoint,
+            wg_private_key: wgKeys.privateKeyBase64,
+            wg_public_key: wgKeys.publicKeyBase64,
+        };
+
+        process.stdout.write(JSON.stringify(result) + '\n');
+    } catch (e) {
+        // On timeout, leave recovery file in place for next attempt
+        log(`Watch failed: ${e} — recovery state preserved at ${RECOVERY_FILE}`);
+        throw e;
+    }
 
     await provider.close();
 }
 
 // ── OP_RETURN watcher ───────────────────────────────────────────────
+
+/** Wrap a promise with a hard timeout to guard against SDK connection stalls. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+        promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); },
+        );
+    });
+}
+
+const RPC_CALL_TIMEOUT_MS = 30_000;
 
 async function watchForResponse(
     provider: JSONRpcProvider,
@@ -331,12 +463,27 @@ async function watchForResponse(
     let lastCheckedBlock = startBlock - 1n;
 
     while (Date.now() < deadline) {
-        const currentHeight = await provider.getBlockNumber();
+        let currentHeight: bigint;
+        try {
+            currentHeight = await withTimeout(
+                provider.getBlockNumber(),
+                RPC_CALL_TIMEOUT_MS,
+                'getBlockNumber',
+            );
+        } catch (e) {
+            log(`getBlockNumber failed, will retry: ${e}`);
+            await new Promise((resolve) => setTimeout(resolve, RESPONSE_POLL_MS));
+            continue;
+        }
 
         for (let h = lastCheckedBlock + 1n; h <= currentHeight; h++) {
             let block;
             try {
-                block = await provider.getBlock(h, true);
+                block = await withTimeout(
+                    provider.getBlock(h, true),
+                    RPC_CALL_TIMEOUT_MS,
+                    `getBlock(${h})`,
+                );
             } catch (e) {
                 log(`Block ${h} not yet available, will retry: ${e}`);
                 break; // stop advancing lastCheckedBlock; retry this height next cycle
@@ -346,13 +493,11 @@ async function watchForResponse(
 
             for (const tx of txs) {
                 for (const output of tx.outputs) {
-                    log(`  output: value=${output.value} script=${output.script ? JSON.stringify(output.script.map(x => x instanceof Uint8Array ? '[bytes:'+x.length+']' : x)) : null}`);
                     if (output.value !== 0n) continue;
                     if (!output.script || output.script.length < 2) continue;
                     if (output.script[0] !== opcodes.OP_RETURN) continue;
 
                     const data = output.script[1];
-                    log(`  OP_RETURN found: data type=${data?.constructor?.name} len=${data?.length} data[0]=${data?.[0]}`);
                     if (!(data instanceof Uint8Array)) continue;
                     if (data.length < 2) continue;
                     if (data[0] !== OP_RETURN_VERSION) continue;
@@ -367,7 +512,7 @@ async function watchForResponse(
                         log(`Response found in block ${h}, tx ${tx.id ?? 'unknown'}`);
                         return deserializeResponse(plaintext);
                     } catch (e) {
-                        log(`  Decrypt failed: ${e}`);
+                        log(`  OP_RETURN v1 decrypt failed (len=${data.length}): ${e}`);
                     }
                 }
             }

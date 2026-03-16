@@ -191,7 +191,7 @@ export class ResponseDelivery {
         const recipientPub = Buffer.from(recipientServerPubkey, 'hex');
         const encrypted = encryptCompact(binary, this.eciesPrivkey, recipientPub);
 
-        const expectedLen = 55 + AES_TAG_LEN; // 71 bytes
+        const expectedLen = 63 + AES_TAG_LEN; // 79 bytes
         if (encrypted.length !== expectedLen) {
             throw new Error(
                 `Unexpected encrypted length: ${encrypted.length} (expected ${expectedLen})`,
