@@ -15,11 +15,11 @@
     <section class="wallet-info-section {% if wallet_info.low_balance %}low-balance{% endif %}">
         <div class="wallet-info">
             <div class="wallet-info-item">
-                <span class="wallet-info-label">Operator Wallet</span>
-                <code class="wallet-info-value" title="{{ wallet_info.address }}">{{ wallet_info.address[:10] }}...{{ wallet_info.address[-8:] }}</code>
+                <span class="wallet-info-label">EVM Operator Wallet</span>
+                <code class="wallet-info-value copyable" title="Click to copy" data-copy="{{ wallet_info.address }}">{{ wallet_info.address[:10] }}...{{ wallet_info.address[-8:] }}</code>
             </div>
             <div class="wallet-info-item">
-                <span class="wallet-info-label">Balance</span>
+                <span class="wallet-info-label">ETH Balance</span>
                 <span class="wallet-info-value balance {% if wallet_info.low_balance %}warning{% endif %}" id="current-balance">
                     {{ "%.4f"|format(wallet_info.balance_eth) }} ETH
                     {% if wallet_info.low_balance %}<span class="warning-icon" title="Low balance - may not be able to process transactions">&#9888;</span>{% endif %}
@@ -40,14 +40,37 @@
         <input type="hidden" id="broker-wallet-address" value="{{ wallet_info.address }}">
         <input type="hidden" id="broker-chain-id" value="{{ wallet_info.chain_id }}">
     </section>
+
+    {% if btc_wallet_info %}
+    <section class="wallet-info-section {% if btc_wallet_info.low_balance %}low-balance{% endif %}">
+        <div class="wallet-info">
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">BTC Operator Wallet</span>
+                <code class="wallet-info-value copyable" title="Click to copy" data-copy="{{ btc_wallet_info.address }}">{{ btc_wallet_info.address[:14] }}...{{ btc_wallet_info.address[-8:] }}</code>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">BTC Balance</span>
+                <span class="wallet-info-value balance {% if btc_wallet_info.low_balance %}warning{% endif %}">
+                    {{ "%.8f"|format(btc_wallet_info.balance_btc) }} BTC
+                    {% if btc_wallet_info.low_balance %}<span class="warning-icon" title="Low balance - may not be able to process transactions">&#9888;</span>{% endif %}
+                </span>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Network</span>
+                <span class="wallet-info-value">{{ btc_wallet_info.network }}</span>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
     <section class="section">
         <div class="section-header">
-            <h2>Active Leases</h2>
+            <h2>EVM Leases <span class="badge badge-evm">{{ evm_leases|length }}</span></h2>
             <button id="refresh-btn" class="btn btn-secondary btn-small">Refresh</button>
         </div>
 
         <div id="leases-container">
-            {% if leases %}
+            {% if evm_leases %}
             <table class="leases-table">
                 <thead>
                     <tr>
@@ -60,12 +83,12 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for lease in leases %}
+                    {% for lease in evm_leases %}
                     <tr data-lease-id="{{ lease.id }}">
                         <td>{{ lease.id }}</td>
-                        <td><code>{{ lease.prefix }}</code></td>
-                        <td><code class="truncate" title="{{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
-                        <td><code class="truncate" title="{{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td><code class="copyable" data-copy="{{ lease.prefix }}" title="Click to copy">{{ lease.prefix }}</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.pubkey }}" title="Click to copy: {{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.nft_contract }}" title="Click to copy: {{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
                         <td>{{ lease.allocated_at[:19] }}</td>
                         <td>
                             <button class="btn btn-danger btn-small release-btn" data-lease-id="{{ lease.id }}">
@@ -78,7 +101,52 @@
             </table>
             {% else %}
             <div class="empty-state">
-                <p>No active leases</p>
+                <p>No EVM leases</p>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="section section-btc">
+        <div class="section-header">
+            <h2>BTC (OPNet) Leases <span class="badge badge-btc">{{ btc_leases|length }}</span></h2>
+        </div>
+
+        <div id="btc-leases-container">
+            {% if btc_leases %}
+            <table class="leases-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Prefix</th>
+                        <th>WireGuard Pubkey</th>
+                        <th>Contract</th>
+                        <th>Source</th>
+                        <th>Allocated</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lease in btc_leases %}
+                    <tr data-lease-id="{{ lease.id }}">
+                        <td>{{ lease.id }}</td>
+                        <td><code class="copyable" data-copy="{{ lease.prefix }}" title="Click to copy">{{ lease.prefix }}</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.pubkey }}" title="Click to copy: {{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.nft_contract }}" title="Click to copy: {{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td><span class="badge badge-source">{{ lease.source }}</span></td>
+                        <td>{{ lease.allocated_at[:19] }}</td>
+                        <td>
+                            <button class="btn btn-danger btn-small release-btn" data-lease-id="{{ lease.id }}">
+                                Release
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No BTC (OPNet) leases</p>
             </div>
             {% endif %}
         </div>
@@ -98,7 +166,8 @@
                         <th>ID</th>
                         <th>Prefix</th>
                         <th>WireGuard Pubkey</th>
-                        <th>NFT Contract</th>
+                        <th>Contract</th>
+                        <th>Source</th>
                         <th>Allocated</th>
                         <th>Expires</th>
                         <th>Actions</th>
@@ -108,9 +177,10 @@
                     {% for lease in test_leases %}
                     <tr data-lease-id="{{ lease.id }}">
                         <td>{{ lease.id }}</td>
-                        <td><code>{{ lease.prefix }}</code></td>
-                        <td><code class="truncate" title="{{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
-                        <td><code class="truncate" title="{{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td><code class="copyable" data-copy="{{ lease.prefix }}" title="Click to copy">{{ lease.prefix }}</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.pubkey }}" title="Click to copy: {{ lease.pubkey }}">{{ lease.pubkey[:20] }}...</code></td>
+                        <td><code class="copyable truncate" data-copy="{{ lease.nft_contract }}" title="Click to copy: {{ lease.nft_contract }}">{{ lease.nft_contract[:10] }}...{{ lease.nft_contract[-6:] }}</code></td>
+                        <td><span class="badge badge-source">{{ lease.source }}</span></td>
                         <td>{{ lease.allocated_at[:19] }}</td>
                         <td>{% if lease.expires_at %}{{ lease.expires_at[:19] }}{% else %}&mdash;{% endif %}</td>
                         <td>
@@ -172,13 +242,46 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(() => toast.classList.add('hidden'), 5000);
     }
 
+    // Copy-on-click for all .copyable elements (Firefox-compatible)
+    document.querySelectorAll('.copyable').forEach(el => {
+        el.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const text = this.dataset.copy || this.textContent.trim();
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast('Copied: ' + (text.length > 40 ? text.slice(0, 20) + '...' + text.slice(-10) : text), 'info');
+                }).catch(() => {
+                    fallbackCopy(text);
+                });
+            } else {
+                fallbackCopy(text);
+            }
+        });
+    });
+
+    function fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            showToast('Copied: ' + (text.length > 40 ? text.slice(0, 20) + '...' + text.slice(-10) : text), 'info');
+        } catch (e) {
+            showToast('Failed to copy', 'error');
+        }
+        document.body.removeChild(ta);
+    }
+
     function showModal(leaseId, prefix, nftContract) {
         currentLeaseId = leaseId;
         modalTitle.textContent = 'Confirm Release';
         modalMessage.textContent = `Are you sure you want to release lease #${leaseId}?`;
         modalDetails.innerHTML = `
             <strong>Prefix:</strong> ${prefix}<br>
-            <strong>NFT:</strong> ${nftContract}
+            <strong>Contract:</strong> ${nftContract}
         `;
         modal.classList.remove('hidden');
     }
@@ -208,13 +311,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     row.style.opacity = '0';
                     setTimeout(() => row.remove(), 300);
                 }
-                // Check if table is now empty
-                setTimeout(() => {
-                    const tbody = document.querySelector('.leases-table tbody');
-                    if (tbody && tbody.children.length === 0) {
-                        location.reload();
-                    }
-                }, 400);
+                // Reload after a short delay
+                setTimeout(() => location.reload(), 500);
             } else {
                 showToast(result.message || 'Failed to release lease', 'error');
             }
@@ -232,8 +330,8 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', function() {
             const leaseId = this.dataset.leaseId;
             const row = this.closest('tr');
-            const prefix = row.querySelector('td:nth-child(2) code').textContent;
-            const nft = row.querySelector('td:nth-child(4) code').title;
+            const prefix = row.querySelector('td:nth-child(2) code').dataset.copy;
+            const nft = row.querySelector('td:nth-child(4) code').dataset.copy;
             showModal(leaseId, prefix, nft);
         });
     });

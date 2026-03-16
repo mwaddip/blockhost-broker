@@ -5,9 +5,11 @@ The broker detects lost peers via handshake timeout; a new on-chain request
 on the same NFT will overwrite the old one automatically.
 """
 
+import json
 import logging
 import sqlite3
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -32,6 +34,7 @@ class Lease:
     endpoint: Optional[str] = None
     is_test: bool = False
     expires_at: Optional[str] = None
+    source: str = "evm"
 
 
 @dataclass
@@ -46,6 +49,17 @@ class WalletInfo:
     low_balance: bool  # True if below threshold
 
 
+@dataclass
+class BtcWalletInfo:
+    """OPNet operator wallet information."""
+
+    address: str
+    balance_sat: int
+    balance_btc: float
+    network: str
+    low_balance: bool
+
+
 # Chain ID to network name mapping
 CHAIN_NAMES = {
     1: "Ethereum Mainnet",
@@ -58,6 +72,7 @@ CHAIN_NAMES = {
 }
 
 LOW_BALANCE_THRESHOLD_WEI = 50000000000000000  # 0.05 ETH
+LOW_BTC_BALANCE_SAT = 10000  # 0.0001 BTC
 
 
 class BrokerManager:
@@ -70,12 +85,18 @@ class BrokerManager:
         rpc_url: str,
         chain_id: int,
         wg_interface: str = "wg-broker",
+        opnet_rpc_url: Optional[str] = None,
+        opnet_operator_address: Optional[str] = None,
+        opnet_network: str = "OPNet Testnet",
     ):
         self.db_path = db_path
         self.operator_key_path = operator_key_path
         self.rpc_url = rpc_url
         self.chain_id = chain_id
         self.wg_interface = wg_interface
+        self.opnet_rpc_url = opnet_rpc_url
+        self.opnet_operator_address = opnet_operator_address
+        self.opnet_network = opnet_network
 
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
 
@@ -100,6 +121,40 @@ class BrokerManager:
             low_balance=balance_wei < LOW_BALANCE_THRESHOLD_WEI,
         )
 
+    def get_btc_wallet_info(self) -> Optional[BtcWalletInfo]:
+        """Get OPNet operator BTC wallet address and balance."""
+        if not self.opnet_rpc_url or not self.opnet_operator_address:
+            return None
+
+        try:
+            rpc_url = self.opnet_rpc_url.rstrip("/") + "/api/v1/json-rpc"
+            payload = json.dumps({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "btc_getBalance",
+                "params": [self.opnet_operator_address],
+            }).encode()
+            req = urllib.request.Request(
+                rpc_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+            raw = data.get("result", "0")
+            balance_sat = int(raw, 16) if isinstance(raw, str) and raw.startswith("0x") else int(raw)
+            return BtcWalletInfo(
+                address=self.opnet_operator_address,
+                balance_sat=balance_sat,
+                balance_btc=balance_sat / 10**8,
+                network=self.opnet_network,
+                low_balance=balance_sat < LOW_BTC_BALANCE_SAT,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch OPNet balance: %s", e)
+            return None
+
     def get_leases(self) -> list[Lease]:
         """Get all current leases from the broker database."""
         if not self.db_path.exists():
@@ -112,7 +167,7 @@ class BrokerManager:
             cursor.execute(
                 """
                 SELECT id, prefix, prefix_index, pubkey, nft_contract, allocated_at, endpoint,
-                       is_test, expires_at
+                       is_test, expires_at, source
                 FROM allocations
                 ORDER BY id DESC
                 """
@@ -132,6 +187,7 @@ class BrokerManager:
                         endpoint=row[6],
                         is_test=bool(row[7]) if row[7] is not None else False,
                         expires_at=row[8],
+                        source=row[9] if row[9] else "evm",
                     )
                 )
             return leases
