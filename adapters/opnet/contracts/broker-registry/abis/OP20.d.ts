@@ -9,13 +9,22 @@ export type TransferredEvent = {
     readonly from: Address;
     readonly to: Address;
     readonly amount: bigint;
+    readonly operator: Address;
+    readonly from: Address;
+    readonly to: Address;
+    readonly tokenId: bigint;
 };
 export type ApprovedEvent = {
     readonly owner: Address;
     readonly spender: Address;
     readonly amount: bigint;
+    readonly owner: Address;
+    readonly operator: Address;
+    readonly tokenId: bigint;
 };
 export type BurnedEvent = {
+    readonly from: Address;
+    readonly amount: bigint;
     readonly from: Address;
     readonly amount: bigint;
 };

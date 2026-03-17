@@ -40,31 +40,6 @@
             ]
         },
         {
-            "name": "collectionInfo",
-            "type": "Function",
-            "payable": false,
-            "onlyOwner": false,
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "icon",
-                    "type": "STRING"
-                },
-                {
-                    "name": "banner",
-                    "type": "STRING"
-                },
-                {
-                    "name": "description",
-                    "type": "STRING"
-                },
-                {
-                    "name": "website",
-                    "type": "STRING"
-                }
-            ]
-        },
-        {
             "name": "tokenURI",
             "type": "Function",
             "payable": false,
@@ -407,7 +382,7 @@
             ]
         },
         {
-            "name": "getApproveNonce",
+            "name": "nonceOf",
             "type": "Function",
             "payable": false,
             "onlyOwner": false,
@@ -498,6 +473,22 @@
                 {
                     "name": "amount",
                     "type": "UINT256"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "from",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "to",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "tokenId",
+                    "type": "UINT256"
                 }
             ],
             "type": "Event"
@@ -515,6 +506,18 @@
                 },
                 {
                     "name": "amount",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "owner",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "operator",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "tokenId",
                     "type": "UINT256"
                 }
             ],
@@ -534,6 +537,28 @@
                 {
                     "name": "approved",
                     "type": "BOOL"
+                }
+            ],
+            "type": "Event"
+        },
+        {
+            "name": "Burned",
+            "values": [
+                {
+                    "name": "from",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "amount",
+                    "type": "UINT256"
+                },
+                {
+                    "name": "from",
+                    "type": "ADDRESS"
+                },
+                {
+                    "name": "amount",
+                    "type": "UINT256"
                 }
             ],
             "type": "Event"

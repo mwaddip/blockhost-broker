@@ -9,16 +9,29 @@ export type TransferredEvent = {
     readonly from: Address;
     readonly to: Address;
     readonly amount: bigint;
+    readonly operator: Address;
+    readonly from: Address;
+    readonly to: Address;
+    readonly tokenId: bigint;
 };
 export type ApprovedEvent = {
     readonly owner: Address;
     readonly spender: Address;
     readonly amount: bigint;
+    readonly owner: Address;
+    readonly operator: Address;
+    readonly tokenId: bigint;
 };
 export type ApprovedForAllEvent = {
     readonly account: Address;
     readonly operator: Address;
     readonly approved: boolean;
+};
+export type BurnedEvent = {
+    readonly from: Address;
+    readonly amount: bigint;
+    readonly from: Address;
+    readonly amount: bigint;
 };
 export type URIEvent = {
     readonly value: string;
@@ -55,19 +68,6 @@ export type Symbol = CallResult<
 export type MaxSupply = CallResult<
     {
         maxSupply: bigint;
-    },
-    OPNetEvent<never>[]
->;
-
-/**
- * @description Represents the result of the collectionInfo function call.
- */
-export type CollectionInfo = CallResult<
-    {
-        icon: string;
-        banner: string;
-        description: string;
-        website: string;
     },
     OPNetEvent<never>[]
 >;
@@ -175,7 +175,7 @@ export type SetApprovalForAllBySignature = CallResult<{}, OPNetEvent<ApprovedEve
 /**
  * @description Represents the result of the burn function call.
  */
-export type Burn = CallResult<{}, OPNetEvent<TransferredEvent>[]>;
+export type Burn = CallResult<{}, OPNetEvent<BurnedEvent>[]>;
 
 /**
  * @description Represents the result of the domainSeparator function call.
@@ -198,9 +198,9 @@ export type TokenOfOwnerByIndex = CallResult<
 >;
 
 /**
- * @description Represents the result of the getApproveNonce function call.
+ * @description Represents the result of the nonceOf function call.
  */
-export type GetApproveNonce = CallResult<
+export type NonceOf = CallResult<
     {
         nonce: bigint;
     },
@@ -236,7 +236,6 @@ export interface IOP721 extends IOP_NETContract {
     name(): Promise<Name>;
     symbol(): Promise<Symbol>;
     maxSupply(): Promise<MaxSupply>;
-    collectionInfo(): Promise<CollectionInfo>;
     tokenURI(tokenId: bigint): Promise<TokenURI>;
     changeMetadata(): Promise<ChangeMetadata>;
     totalSupply(): Promise<TotalSupply>;
@@ -269,7 +268,7 @@ export interface IOP721 extends IOP_NETContract {
     burn(tokenId: bigint): Promise<Burn>;
     domainSeparator(): Promise<DomainSeparator>;
     tokenOfOwnerByIndex(owner: Address, index: bigint): Promise<TokenOfOwnerByIndex>;
-    getApproveNonce(owner: Address): Promise<GetApproveNonce>;
+    nonceOf(owner: Address): Promise<NonceOf>;
     setBaseURI(baseURI: string): Promise<SetBaseURI>;
     metadata(): Promise<Metadata>;
 }
