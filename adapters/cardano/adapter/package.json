@@ -19,5 +19,8 @@
         "esbuild": "^0.27.3",
         "tsx": "^4.0.0",
         "typescript": "^5.9.3"
+    },
+    "overrides": {
+        "libsodium-wrappers-sumo": "0.8.2"
     }
 }
