@@ -21,7 +21,7 @@
     "adapter_args": ["/opt/blockhost/adapters/cardano/client/dist/main.js", "request"],
     "timeout": 600,
     "koios_url": "https://preprod.koios.rest/api/v1",
-    "registry_address": "",
-    "beacon_policy_id": ""
+    "registry_address": "addr_test1wz6scyhnjeythyt6gchn5r26qeyqe0p4v7dmvstl3gd5dlc3wwyvx",
+    "beacon_policy_id": "d72e1fa50585950914e5f6cb456ad699d738f87d5196711a0482420c"
   }
 ]

@@ -5,6 +5,7 @@
     "dependencies": {
         "@meshsdk/core": "^1.8.14",
         "@meshsdk/provider": "^1.8.14",
+        "@noble/curves": "^2.0.1",
         "@scure/bip39": "^2.0.1"
     },
     "devDependencies": {

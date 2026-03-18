@@ -1,6 +1,7 @@
 {
-  "registry_address": "",
-  "broker_address": "",
-  "beacon_policy_id": "",
+  "registry_address": "addr_test1wz6scyhnjeythyt6gchn5r26qeyqe0p4v7dmvstl3gd5dlc3wwyvx",
+  "broker_address": "addr_test1wr30vlte5lujfpuvzakjfd86tl2ml6rdd9ppnths95cl3sceh35rv",
+  "beacon_policy_id": "d72e1fa50585950914e5f6cb456ad699d738f87d5196711a0482420c",
+  "operator_pkh": "9a0bd0af05421768af08076244a25a39a3cdd57e48db4384ab95e27b",
   "network": "cardano-preprod"
 }

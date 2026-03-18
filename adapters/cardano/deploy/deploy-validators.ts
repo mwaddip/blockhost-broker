@@ -1,91 +1,131 @@
 /**
  * Deploy broker validators to Cardano preprod.
  *
- * Reads compiled scripts from ../contracts/plutus.json,
- * parameterizes them with the operator's pubkey hash,
- * and outputs the derived addresses and policy IDs.
+ * Parameterizes the Aiken-compiled scripts and outputs addresses/policy IDs.
+ * Also creates the registry reference UTXO with broker info.
  *
  * Environment:
- *   SIGNING_KEY       - Operator ed25519 signing key (hex)
- *
- * Usage:
- *   SIGNING_KEY=... npx tsx deploy-validators.ts
+ *   OPERATOR_MNEMONIC  - Operator wallet mnemonic (24 words)
+ *   ECIES_PRIVATE_KEY  - Broker ECIES private key (hex)
  */
 
 import { readFileSync } from 'node:fs';
 import {
+    MeshWallet,
+    Transaction,
     applyParamsToScript,
     resolveScriptHash,
     resolvePaymentKeyHash,
     serializePlutusScript,
 } from '@meshsdk/core';
+import { KoiosProvider } from '@meshsdk/provider';
 
-const SIGNING_KEY = process.env['SIGNING_KEY'];
+const OPERATOR_MNEMONIC = process.env.OPERATOR_MNEMONIC;
+const ECIES_PRIVATE_KEY = process.env.ECIES_PRIVATE_KEY;
 
-if (!SIGNING_KEY) {
-    console.error('Missing SIGNING_KEY env var');
-    process.exit(1);
-}
+if (!OPERATOR_MNEMONIC) { console.error('Missing OPERATOR_MNEMONIC'); process.exit(1); }
+if (!ECIES_PRIVATE_KEY) { console.error('Missing ECIES_PRIVATE_KEY'); process.exit(1); }
 
 // Load blueprint
 const blueprint = JSON.parse(
     readFileSync(new URL('../contracts/plutus.json', import.meta.url), 'utf-8'),
 );
 
-const registryValidator = blueprint.validators.find(
-    (v: any) => v.title === 'registry.registry.spend',
-);
-const brokerValidator = blueprint.validators.find(
-    (v: any) => v.title === 'broker.broker.spend',
-);
-const beaconValidator = blueprint.validators.find(
-    (v: any) => v.title === 'beacon.beacon.mint',
-);
+const registryRaw = blueprint.validators.find((v: any) => v.title === 'registry.registry.spend');
+const brokerRaw = blueprint.validators.find((v: any) => v.title === 'broker.broker.spend');
+const beaconRaw = blueprint.validators.find((v: any) => v.title === 'beacon.beacon.mint');
 
-if (!registryValidator || !brokerValidator || !beaconValidator) {
+if (!registryRaw || !brokerRaw || !beaconRaw) {
     throw new Error('Missing validators in blueprint');
 }
 
-const operatorPkh = resolvePaymentKeyHash(SIGNING_KEY);
-console.log(`Operator PKH: ${operatorPkh}`);
+// Provider + wallet
+const provider = new KoiosProvider('preprod');
+const wallet = new MeshWallet({
+    networkId: 0,
+    fetcher: provider,
+    submitter: provider,
+    key: { type: 'mnemonic', words: OPERATOR_MNEMONIC.split(' ') },
+});
 
-// 1. Registry — no params
-const registryInfo = serializePlutusScript(
-    { code: registryValidator.compiledCode, version: 'V3' },
-    undefined,
-    0, // preprod = 0
-);
-console.log(`\nRegistry validator:`);
-console.log(`  Hash:    ${registryValidator.hash}`);
-console.log(`  Address: ${registryInfo.address}`);
+const operatorAddress = wallet.getChangeAddress();
+const operatorPkh = resolvePaymentKeyHash(operatorAddress);
 
-// 2. Broker — param: operator_pkh only (no circular dep)
-const brokerCbor = applyParamsToScript(brokerValidator.compiledCode, [operatorPkh]);
+console.log('Operator address:', operatorAddress);
+console.log('Operator PKH:', operatorPkh);
+
+// Derive ECIES public key
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+const eciesPriv = Buffer.from(ECIES_PRIVATE_KEY.startsWith('0x') ? ECIES_PRIVATE_KEY.slice(2) : ECIES_PRIVATE_KEY, 'hex');
+const eciesPubkey = Buffer.from(secp256k1.getPublicKey(eciesPriv, true)).toString('hex'); // compressed
+console.log('ECIES pubkey (compressed):', eciesPubkey);
+
+// === 1. Registry validator (no params) ===
+const registryScript = { code: registryRaw.compiledCode, version: 'V3' as const };
+const registryInfo = serializePlutusScript(registryScript, undefined, 0);
+console.log('\nRegistry:');
+console.log('  Hash:', registryRaw.hash);
+console.log('  Address:', registryInfo.address);
+
+// === 2. Broker validator (param: operator_pkh) ===
+const brokerCbor = applyParamsToScript(brokerRaw.compiledCode, [operatorPkh]);
 const brokerHash = resolveScriptHash(brokerCbor, 'V3');
-const brokerInfo = serializePlutusScript(
-    { code: brokerCbor, version: 'V3' },
-    undefined,
-    0,
-);
-console.log(`\nBroker validator:`);
-console.log(`  Hash:    ${brokerHash}`);
-console.log(`  Address: ${brokerInfo.address}`);
+const brokerScript = { code: brokerCbor, version: 'V3' as const };
+const brokerInfo = serializePlutusScript(brokerScript, undefined, 0);
+console.log('\nBroker:');
+console.log('  Hash:', brokerHash);
+console.log('  Address:', brokerInfo.address);
 
-// 3. Beacon — params: (broker_hash, operator_pkh)
-const beaconCbor = applyParamsToScript(beaconValidator.compiledCode, [
-    brokerHash,
-    operatorPkh,
-]);
+// === 3. Beacon minting policy (params: broker_hash, operator_pkh) ===
+const beaconCbor = applyParamsToScript(beaconRaw.compiledCode, [brokerHash, operatorPkh]);
 const beaconPolicyId = resolveScriptHash(beaconCbor, 'V3');
-console.log(`\nBeacon minting policy:`);
-console.log(`  Policy ID: ${beaconPolicyId}`);
+console.log('\nBeacon:');
+console.log('  Policy ID:', beaconPolicyId);
 
-// Output summary for registry config
-console.log(`\n--- Registry config (registry-cardano-preprod.json) ---`);
-console.log(JSON.stringify({
+// === Summary ===
+const config = {
     registry_address: registryInfo.address,
     broker_address: brokerInfo.address,
     beacon_policy_id: beaconPolicyId,
     operator_pkh: operatorPkh,
     network: 'cardano-preprod',
-}, null, 2));
+};
+console.log('\n--- registry-cardano-preprod.json ---');
+console.log(JSON.stringify(config, null, 2));
+
+// === 4. Create registry reference UTXO ===
+const MODE = process.argv[2];
+if (MODE !== '--deploy') {
+    console.log('\nDry run. Pass --deploy to create the registry UTXO on-chain.');
+    process.exit(0);
+}
+
+console.log('\n=== Deploying registry UTXO ===');
+
+// Build RegistryDatum
+const registryDatum = {
+    alternative: 0,
+    fields: [
+        operatorPkh,
+        eciesPubkey,
+        0,                                              // capacity_status: available
+        Buffer.from('eu-west').toString('hex'),
+        brokerHash,                                     // requests_validator_hash
+        beaconPolicyId,
+    ],
+};
+
+const tx = new Transaction({ initiator: wallet });
+tx.sendLovelace(
+    {
+        address: registryInfo.address,
+        datum: { inline: true, value: registryDatum },
+    },
+    '5000000', // 5 ADA for the registry UTXO
+);
+
+const unsignedTx = await tx.build();
+const signedTx = await wallet.signTx(unsignedTx);
+const txHash = await wallet.submitTx(signedTx);
+console.log('Registry UTXO created:', txHash);
+console.log('\nDone! Update registry-cardano-preprod.json with the values above.');
