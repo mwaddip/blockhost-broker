@@ -6,7 +6,7 @@
 export interface AdapterConfig {
     koiosUrl: string;
     blockfrostApiKey: string | null;
-    operatorSigningKey: string;
+    operatorMnemonic: string;
     eciesPrivateKey: string;
     validatorAddress: string;
     beaconPolicyId: string;
@@ -34,7 +34,7 @@ export function loadConfig(): AdapterConfig {
     return {
         koiosUrl: requireEnv('KOIOS_URL', `https://${network}.koios.rest/api/v1`),
         blockfrostApiKey: process.env['BLOCKFROST_API_KEY'] || null,
-        operatorSigningKey: requireEnv('OPERATOR_SIGNING_KEY'),
+        operatorMnemonic: requireEnv('OPERATOR_MNEMONIC'),
         eciesPrivateKey: requireEnv('ECIES_PRIVATE_KEY'),
         validatorAddress: requireEnv('VALIDATOR_ADDRESS'),
         beaconPolicyId: requireEnv('BEACON_POLICY_ID'),

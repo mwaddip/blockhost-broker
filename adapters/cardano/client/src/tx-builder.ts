@@ -109,7 +109,7 @@ export class ClientTxBuilder {
         // RequestDatum: constructor 0
         // RequestDatum { nft_policy_id, client_pkh, encrypted_payload }
         const requestDatum = {
-            constructor: 0,
+            alternative: 0,
             fields: [
                 { bytes: nftPolicyId },
                 { bytes: clientPkh },
@@ -119,7 +119,7 @@ export class ClientTxBuilder {
 
         // MintRequestBeacon redeemer: constructor 0 in BeaconAction
         const mintRequestRedeemer = {
-            constructor: 0,
+            alternative: 0,
             fields: [],
         };
 
@@ -220,13 +220,13 @@ export class ClientTxBuilder {
     ): Promise<string> {
         // ConsumeResponse redeemer: constructor 1 in BrokerAction
         const consumeResponseRedeemer = {
-            constructor: 1,
+            alternative: 1,
             fields: [],
         };
 
         // BurnResponseBeacon redeemer: constructor 3 in BeaconAction
         const burnResponseRedeemer = {
-            constructor: 3,
+            alternative: 3,
             fields: [],
         };
 

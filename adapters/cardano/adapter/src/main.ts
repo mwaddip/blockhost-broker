@@ -43,13 +43,21 @@ function saveState(processedRefs: Set<string>): void {
 // ── Services ────────────────────────────────────────────────────────
 
 const encryption = new EciesEncryption(config.eciesPrivateKey);
-// Derive operator pubkey hash from signing key for script parameterization
-// The signing key is an ed25519 key — the pkh is blake2b-224 of the verification key
-import { resolvePaymentKeyHash } from '@meshsdk/core';
-const operatorPkh = resolvePaymentKeyHash(config.operatorSigningKey);
+import { MeshWallet, resolvePaymentKeyHash } from '@meshsdk/core';
+import { KoiosProvider } from '@meshsdk/provider';
+
+const meshProvider = new KoiosProvider(config.network === 'mainnet' ? 'api' : 'preprod');
+const operatorWallet = new MeshWallet({
+    networkId: config.network === 'mainnet' ? 1 : 0,
+    fetcher: meshProvider,
+    submitter: meshProvider,
+    key: { type: 'mnemonic', words: config.operatorMnemonic.split(' ') },
+});
+const operatorAddress = operatorWallet.getChangeAddress();
+const operatorPkh = resolvePaymentKeyHash(operatorAddress);
 
 const txBuilder = new ResponseTxBuilder(
-    config.operatorSigningKey,
+    operatorWallet,
     config.validatorAddress,
     config.beaconPolicyId,
     config.koiosUrl,

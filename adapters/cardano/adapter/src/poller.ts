@@ -82,8 +82,15 @@ export class RequestPoller {
     }
 
     private async fetchFromKoios(): Promise<RequestUtxo[]> {
-        const url = `${this.koiosUrl}/address_utxos?_address=${this.validatorAddress}&_extended=true`;
-        const resp = await fetch(url);
+        const url = `${this.koiosUrl}/address_utxos`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                _addresses: [this.validatorAddress],
+                _extended: true,
+            }),
+        });
         if (!resp.ok) {
             throw new Error(`Koios ${resp.status}: ${await resp.text()}`);
         }

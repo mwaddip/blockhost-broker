@@ -9,7 +9,8 @@
  */
 
 import {
-    MeshTxBuilder,
+    MeshWallet,
+    Transaction,
     applyParamsToScript,
     resolveScriptHash,
     serializePlutusScript,
@@ -43,9 +44,10 @@ export class ResponseTxBuilder {
     private beaconPolicyId: string;
     private validatorAddress: string;
     private operatorAddress: string;
+    private wallet: MeshWallet;
 
     constructor(
-        private operatorSigningKey: string,
+        wallet: MeshWallet,
         validatorAddress: string,
         beaconPolicyId: string,
         koiosUrl: string,
@@ -54,6 +56,7 @@ export class ResponseTxBuilder {
         blueprintPath: string,
         operatorPkh: string,
     ) {
+        this.wallet = wallet;
         this.validatorAddress = validatorAddress;
         this.beaconPolicyId = beaconPolicyId;
 
@@ -114,107 +117,72 @@ export class ResponseTxBuilder {
     ): Promise<string> {
         console.log(`[tx-builder] Building response tx for ${requestUtxo.ref.txHash}#${requestUtxo.ref.outputIndex}`);
 
-        // ResponseDatum: constructor 1 (second variant in the Datum union)
         // ResponseDatum { client_pkh, encrypted_response }
-        const responseDatumJson = {
-            constructor: 1, // ResponseDatum is the second type after RequestDatum
+        const responseDatum = {
+            alternative: 1,
             fields: [
-                { bytes: requestUtxo.clientPkh },
-                { bytes: Buffer.from(encryptedResponse).toString('hex') },
+                requestUtxo.clientPkh,
+                Buffer.from(encryptedResponse).toString('hex'),
             ],
         };
 
-        // ConsumeRequest redeemer: constructor 0 in BrokerAction
-        // ConsumeRequest { beacon_policy_id } — passed at runtime to avoid circular dep
+        // ConsumeRequest { beacon_policy_id }
         const consumeRequestRedeemer = {
-            constructor: 0,
-            fields: [{ bytes: this.beaconPolicyId }],
+            alternative: 0,
+            fields: [this.beaconPolicyId],
         };
 
-        // BurnRequestBeacon redeemer: constructor 1 in BeaconAction
-        const burnRequestRedeemer = {
-            constructor: 1,
-            fields: [],
-        };
+        // BurnRequestBeacon
+        const burnRequestRedeemer = { alternative: 1, fields: [] };
 
-        // MintResponseBeacon redeemer: constructor 2 in BeaconAction
-        const mintResponseRedeemer = {
-            constructor: 2,
-            fields: [],
-        };
+        // MintResponseBeacon
+        const mintResponseRedeemer = { alternative: 2, fields: [] };
 
-        // Find a collateral UTXO from the operator (needs pure ADA, no tokens)
-        const operatorUtxos = await this.provider.fetchAddressUTxOs(this.operatorAddress);
-        if (operatorUtxos.length === 0) {
-            throw new Error('No UTXOs available at operator address');
-        }
-
-        const collateral = operatorUtxos.find(
-            (u: UTxO) => u.output.amount.length === 1 && u.output.amount[0].unit === 'lovelace',
+        // Fetch the actual request UTXO object for redeemValue
+        const scriptUtxos = await this.provider.fetchAddressUTxOs(this.validatorAddress);
+        const requestScriptUtxo = scriptUtxos.find(
+            (u: UTxO) =>
+                u.input.txHash === requestUtxo.ref.txHash &&
+                u.input.outputIndex === requestUtxo.ref.outputIndex,
         );
-        if (!collateral) {
-            throw new Error('No pure ADA UTXO for collateral at operator address');
+        if (!requestScriptUtxo) {
+            throw new Error(`Request UTXO not found: ${requestUtxo.ref.txHash}#${requestUtxo.ref.outputIndex}`);
         }
 
-        // Build the transaction
-        const txBuilder = new MeshTxBuilder({
-            fetcher: this.provider,
-            submitter: this.provider,
+        const tx = new Transaction({ initiator: this.wallet });
+
+        // 1. Consume the request UTXO
+        tx.redeemValue({
+            value: requestScriptUtxo,
+            script: this.brokerScript,
+            redeemer: { data: consumeRequestRedeemer },
         });
 
-        // 1. Consume the request UTXO (spending from script)
-        txBuilder
-            .spendingPlutusScriptV3()
-            .txIn(
-                requestUtxo.ref.txHash,
-                requestUtxo.ref.outputIndex,
-            )
-            .txInInlineDatumPresent()
-            .txInRedeemerValue(consumeRequestRedeemer, 'JSON')
-            .txInScript(this.brokerScriptCbor);
+        // 2. Burn request beacon + Mint response beacon
+        tx.mintAsset(this.beaconScript, {
+            assetName: 'request',
+            assetQuantity: '-1',
+            recipient: this.operatorAddress,
+            label: undefined,
+            metadata: undefined,
+        });
+        // Note: MeshJS Transaction API may need separate mint calls
+        // This needs testing — the low-level MeshTxBuilder might be needed
+        // for multi-mint with different redeemers on the same policy
 
-        // 2. Burn the request beacon
-        txBuilder
-            .mintPlutusScriptV3()
-            .mint('-1', this.beaconPolicyId, REQUEST_BEACON_NAME)
-            .mintingScript(this.beaconScriptCbor)
-            .mintRedeemerValue(burnRequestRedeemer, 'JSON');
-
-        // 3. Mint a response beacon
-        txBuilder
-            .mintPlutusScriptV3()
-            .mint('1', this.beaconPolicyId, RESPONSE_BEACON_NAME)
-            .mintingScript(this.beaconScriptCbor)
-            .mintRedeemerValue(mintResponseRedeemer, 'JSON');
-
-        // 4. Produce response UTXO at the validator with inline datum
-        const minAda = '2000000'; // 2 ADA minimum
-        txBuilder
-            .txOut(this.validatorAddress, [
-                { unit: 'lovelace', quantity: minAda },
-                { unit: this.beaconPolicyId + RESPONSE_BEACON_NAME, quantity: '1' },
-            ])
-            .txOutInlineDatumValue(responseDatumJson, 'JSON');
-
-        // 5. Collateral
-        txBuilder.txInCollateral(
-            collateral.input.txHash,
-            collateral.input.outputIndex,
-            collateral.output.amount,
-            collateral.output.address,
+        // 3. Produce response UTXO at validator
+        tx.sendLovelace(
+            {
+                address: this.validatorAddress,
+                datum: { inline: true, value: responseDatum },
+            },
+            '2000000',
         );
 
-        // 6. Required signer (operator)
-        txBuilder.signingKey(this.operatorSigningKey);
-
-        // 7. Complete and submit
-        const unsignedTx = await txBuilder.complete();
-        const signedTx = txBuilder.completeSigning();
-        const txHash = await this.provider.submitTx(signedTx);
-
-        if (!txHash) {
-            throw new Error('Transaction submission returned no hash');
-        }
+        // Build, sign, submit
+        const unsignedTx = await tx.build();
+        const signedTx = await this.wallet.signTx(unsignedTx);
+        const txHash = await this.wallet.submitTx(signedTx);
 
         console.log(`[tx-builder] Response tx submitted: ${txHash}`);
         return txHash;

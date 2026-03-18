@@ -162,8 +162,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 // ── Koios helpers ───────────────────────────────────────────────────
 
 async function queryUtxos(koiosUrl: string, address: string): Promise<any[]> {
-    const url = `${koiosUrl}/address_utxos?_address=${address}&_extended=true`;
-    const resp = await fetch(url);
+    const url = `${koiosUrl}/address_utxos`;
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ _addresses: [address], _extended: true }),
+    });
     if (!resp.ok) throw new Error(`Koios ${resp.status}: ${await resp.text()}`);
     return resp.json();
 }
