@@ -1,0 +1,13 @@
+{
+    "name": "blockhost-cardano-deploy",
+    "version": "0.1.0",
+    "type": "module",
+    "dependencies": {
+        "@meshsdk/core": "^1.8.14",
+        "@meshsdk/provider": "^1.8.14"
+    },
+    "devDependencies": {
+        "tsx": "^4.0.0",
+        "typescript": "^5.9.3"
+    }
+}

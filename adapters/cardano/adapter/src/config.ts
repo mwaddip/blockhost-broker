@@ -43,6 +43,10 @@ export function loadConfig(): AdapterConfig {
         source: requireEnv('ADAPTER_SOURCE', `cardano-${network}`),
         leaseDuration: parseInt(requireEnv('LEASE_DURATION', '0'), 10),
         pollIntervalMs: parseInt(requireEnv('POLL_INTERVAL_MS', '20000'), 10),
+        blueprintPath: requireEnv(
+            'BLUEPRINT_PATH',
+            '/opt/blockhost/adapters/cardano/contracts/plutus.json',
+        ),
         stateFile: requireEnv(
             'STATE_FILE',
             `/var/lib/blockhost-broker/adapter-cardano-${network}.state`,

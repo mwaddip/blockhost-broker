@@ -13,5 +13,15 @@
     "adapter_args": ["/opt/blockhost/adapters/opnet/client/dist/main.js", "request"],
     "timeout": 2400,
     "rpc_url": "https://testnet.opnet.org"
+  },
+  {
+    "name": "cardano",
+    "match": "^[0-9a-fA-F]{56}$",
+    "adapter": "node",
+    "adapter_args": ["/opt/blockhost/adapters/cardano/client/dist/main.js", "request"],
+    "timeout": 600,
+    "koios_url": "https://preprod.koios.rest/api/v1",
+    "registry_address": "",
+    "beacon_policy_id": ""
   }
 ]

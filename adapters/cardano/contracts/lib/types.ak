@@ -28,7 +28,10 @@ pub type ResponseDatum {
 /// invoke the spend validator in Cardano's EUTXO model. Request creation
 /// is validated entirely by the beacon minting policy.
 pub type BrokerAction {
-  ConsumeRequest
+  /// Broker consumes a request UTXO. The beacon_policy_id is passed in the
+  /// redeemer (not as a validator parameter) to break the circular dependency
+  /// between broker and beacon script hashes.
+  ConsumeRequest { beacon_policy_id: ByteArray }
   ConsumeResponse
 }
 

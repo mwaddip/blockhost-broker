@@ -43,6 +43,11 @@ function saveState(processedRefs: Set<string>): void {
 // ── Services ────────────────────────────────────────────────────────
 
 const encryption = new EciesEncryption(config.eciesPrivateKey);
+// Derive operator pubkey hash from signing key for script parameterization
+// The signing key is an ed25519 key — the pkh is blake2b-224 of the verification key
+import { resolvePaymentKeyHash } from '@meshsdk/core';
+const operatorPkh = resolvePaymentKeyHash(config.operatorSigningKey);
+
 const txBuilder = new ResponseTxBuilder(
     config.operatorSigningKey,
     config.validatorAddress,
@@ -50,6 +55,8 @@ const txBuilder = new ResponseTxBuilder(
     config.koiosUrl,
     config.blockfrostApiKey,
     config.network,
+    config.blueprintPath,
+    operatorPkh,
 );
 
 // ── Broker API client ──────────────────────────────────────────────

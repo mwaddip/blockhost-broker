@@ -5,14 +5,14 @@ use types.{BrokerAction, ConsumeRequest, ConsumeResponse, ResponseDatum}
 
 /// Broker validator: handles request/response UTXO lifecycle.
 ///
-/// Sending to this address (creating request UTXOs) does not invoke this
-/// validator — that's handled by the beacon minting policy which validates
-/// datum structure, NFT presence, and output destination.
+/// Parameterized only with operator_pkh (no beacon_policy_id parameter,
+/// avoiding circular dependency with the beacon minting policy).
+/// The beacon_policy_id is passed in the ConsumeRequest redeemer instead.
 ///
 /// This validator only fires when consuming UTXOs at this address:
 /// - ConsumeRequest: broker operator consumes request, produces response
 /// - ConsumeResponse: client cleans up response UTXO
-validator broker(operator_pkh: ByteArray, beacon_policy_id: ByteArray) {
+validator broker(operator_pkh: ByteArray) {
   spend(
     datum: Option<Data>,
     redeemer: BrokerAction,
@@ -20,7 +20,7 @@ validator broker(operator_pkh: ByteArray, beacon_policy_id: ByteArray) {
     tx: Transaction,
   ) {
     when redeemer is {
-      ConsumeRequest -> {
+      ConsumeRequest { beacon_policy_id } -> {
         // Must be signed by broker operator
         let signed = list.has(tx.extra_signatories, operator_pkh)
 
@@ -28,7 +28,11 @@ validator broker(operator_pkh: ByteArray, beacon_policy_id: ByteArray) {
         // this redeemer to consume response UTXOs and bypass ConsumeResponse)
         expect Some(own_input) = find_input(tx.inputs, own_ref)
         let has_request_beacon =
-          assets.quantity_of(own_input.output.value, beacon_policy_id, "request") == 1
+          assets.quantity_of(
+            own_input.output.value,
+            beacon_policy_id,
+            "request",
+          ) == 1
 
         // Must produce at least one output back to this validator address
         let own_address = own_input.output.address
