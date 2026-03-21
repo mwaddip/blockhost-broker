@@ -143,7 +143,7 @@ export class EciesEncryption {
         const recipientPub = Buffer.from(recipientServerPubkeyHex, 'hex');
         // Ensure uncompressed
         const recipientPubUncompressed = recipientPub.length === 33
-            ? secp256k1.ProjectivePoint.fromHex(recipientPub).toRawBytes(false)
+            ? Buffer.from(secp256k1.Point.fromHex(recipientPub.toString('hex')).toBytes(false))
             : recipientPub;
         return encryptCompact(plaintext, this.privateKey, recipientPubUncompressed);
     }

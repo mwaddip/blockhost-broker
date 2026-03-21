@@ -14,18 +14,22 @@ _REPO_RAW = "https://raw.githubusercontent.com/mwaddip/blockhost-broker/main"
 
 _EVM_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _OPNET_PATTERN = re.compile(r"^(bc1p|opt1p)[a-z0-9]{58}$")
+_CARDANO_PATTERN = re.compile(r"^addr(_test)?1[a-z0-9]{50,120}$")
 
 
 def fetch_registry(wallet_address: str, testing: bool = False) -> Optional[str]:
     """Return the registry contract address for the given wallet's chain.
 
     Derives the chain from wallet_address format:
-    - EVM:   0x + 40 hex chars              → registry.json / registry-testnet.json
-    - OPNet: bc1p (mainnet) / opt1p (testnet) + 58 alphanum → registry-opnet-testnet.json
+    - EVM:     0x + 40 hex chars                → registry.json / registry-testnet.json
+    - OPNet:   bc1p (mainnet) / opt1p (testnet)  → registry-opnet-testnet.json
+    - Cardano: addr1... / addr_test1...          → registry-cardano-preprod.json
 
     Returns the registry_contract string, or None on any error.
     """
-    if _OPNET_PATTERN.match(wallet_address):
+    if _CARDANO_PATTERN.match(wallet_address):
+        filename = "registry-cardano-preprod.json"
+    elif _OPNET_PATTERN.match(wallet_address):
         filename = "registry-opnet-testnet.json"
     elif _EVM_PATTERN.match(wallet_address):
         filename = "registry-testnet.json" if testing else "registry.json"

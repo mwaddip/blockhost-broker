@@ -148,10 +148,11 @@ export class RequestPoller {
     }
 
     private hasRequestBeacon(utxo: any, source: 'koios' | 'blockfrost'): boolean {
+        const requestBeaconHex = Buffer.from('request').toString('hex'); // 72657175657374
         if (source === 'koios') {
             const assets = utxo.asset_list ?? [];
             return assets.some(
-                (a: any) => a.policy_id === this.beaconPolicyId && a.asset_name_ascii === 'request',
+                (a: any) => a.policy_id === this.beaconPolicyId && a.asset_name === requestBeaconHex,
             );
         } else {
             const amounts = utxo.amount ?? [];

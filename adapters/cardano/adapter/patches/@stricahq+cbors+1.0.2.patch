@@ -1,0 +1,48 @@
+diff --git a/node_modules/@stricahq/cbors/dist/encode.js b/node_modules/@stricahq/cbors/dist/encode.js
+index 810f484..0dfce18 100644
+--- a/node_modules/@stricahq/cbors/dist/encode.js
++++ b/node_modules/@stricahq/cbors/dist/encode.js
+@@ -165,6 +165,17 @@ exports.default = (input, options = { collapseBigNumber: true }) => {
+                         pushBuffer(BREAK);
+                     }
+                 }
++                else if (value instanceof helpers_1.IndefiniteByteString) {
++                    pushUInt8((2 << 5) | 31);
++                    const buf = value.buffer;
++                    const cs = value.chunkSize;
++                    for (let i = 0; i < buf.length; i += cs) {
++                        const chunk = buf.subarray(i, Math.min(i + cs, buf.length));
++                        pushTypeAndLength(2, chunk.length);
++                        pushBuffer(chunk);
++                    }
++                    pushBuffer(BREAK);
++                }
+                 else if (value instanceof buffer_1.Buffer) {
+                     pushTypeAndLength(2, value.length);
+                     pushBuffer(value);
+diff --git a/node_modules/@stricahq/cbors/dist/helpers.js b/node_modules/@stricahq/cbors/dist/helpers.js
+index 818207a..ceaa296 100644
+--- a/node_modules/@stricahq/cbors/dist/helpers.js
++++ b/node_modules/@stricahq/cbors/dist/helpers.js
+@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
+     return (mod && mod.__esModule) ? mod : { "default": mod };
+ };
+ Object.defineProperty(exports, "__esModule", { value: true });
+-exports.CborTag = exports.IndefiniteArray = exports.IndefiniteMap = void 0;
++exports.CborTag = exports.IndefiniteByteString = exports.IndefiniteArray = exports.IndefiniteMap = void 0;
+ /* eslint-disable max-classes-per-file */
+ class IndefiniteMap extends Map {
+ }
+@@ -11,5 +11,12 @@ exports.IndefiniteMap = IndefiniteMap;
+ class IndefiniteArray extends Array {
+ }
+ exports.IndefiniteArray = IndefiniteArray;
++class IndefiniteByteString {
++    constructor(buffer, chunkSize = 64) {
++        this.buffer = buffer;
++        this.chunkSize = chunkSize;
++    }
++}
++exports.IndefiniteByteString = IndefiniteByteString;
+ var CborTag_1 = require("./CborTag");
+ Object.defineProperty(exports, "CborTag", { enumerable: true, get: function () { return __importDefault(CborTag_1).default; } });

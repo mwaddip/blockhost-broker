@@ -15,6 +15,7 @@ export interface AdapterConfig {
     source: string;
     leaseDuration: number;
     pollIntervalMs: number;
+    scriptsPath: string;
     stateFile: string;
     network: string;
 }
@@ -43,9 +44,9 @@ export function loadConfig(): AdapterConfig {
         source: requireEnv('ADAPTER_SOURCE', `cardano-${network}`),
         leaseDuration: parseInt(requireEnv('LEASE_DURATION', '0'), 10),
         pollIntervalMs: parseInt(requireEnv('POLL_INTERVAL_MS', '20000'), 10),
-        blueprintPath: requireEnv(
-            'BLUEPRINT_PATH',
-            '/opt/blockhost/adapters/cardano/contracts/plutus.json',
+        scriptsPath: requireEnv(
+            'SCRIPTS_PATH',
+            '/opt/blockhost/adapters/cardano/contracts/parameterized-scripts.json',
         ),
         stateFile: requireEnv(
             'STATE_FILE',

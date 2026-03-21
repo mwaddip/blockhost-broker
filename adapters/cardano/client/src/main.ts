@@ -13,7 +13,8 @@
  *     --signing-key /path/to/key \
  *     --nft-policy-id abc123... \
  *     --registry-address addr_test1... \
- *     --beacon-policy abc123...
+ *     --beacon-policy abc123... \
+ *     --scripts-path /path/to/parameterized-scripts.json
  */
 
 import {
@@ -26,9 +27,16 @@ import {
     serializeRequestPayload,
     type TunnelConfig,
 } from './crypto.js';
+import {
+    ClientTxBuilder,
+    loadSigningKey,
+    deriveKeyHash,
+    deriveAddress,
+} from './tx-builder.js';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { types } from '@stricahq/typhonjs';
 
 // ── Logging (all to stderr) ─────────────────────────────────────────
 
@@ -46,11 +54,11 @@ function fatal(msg: string): never {
 interface Args {
     command: string;
     koiosUrl: string;
-    blockfrostApiKey: string | null;
     signingKey: string;
     nftPolicyId: string;
     registryAddress: string;
     beaconPolicyId: string;
+    scriptsPath: string;
     timeoutMs: number;
     serverKey: string | null;
 }
@@ -68,35 +76,40 @@ function parseArgs(): Args {
             `  --nft-policy-id HEX        NFT policy ID (56 hex chars)\n` +
             `  --registry-address ADDR    Registry validator bech32 address\n` +
             `  --beacon-policy HEX        Beacon minting policy ID\n` +
+            `  --scripts-path PATH        Path to parameterized-scripts.json\n` +
             `  --timeout N                Response timeout in seconds (default: 600)\n` +
             `  --server-key HEX           Persistent ECIES private key (optional)\n`,
         );
         process.exit(command ? 0 : 1);
     }
 
-    function getFlag(name: string, fallback?: string): string {
-        const idx = argv.indexOf(name);
-        if (idx === -1 || idx + 1 >= argv.length) {
-            if (fallback !== undefined) return fallback;
-            fatal(`Missing required argument: ${name}`);
+    function getFlag(names: string | string[], fallback?: string): string {
+        const nameList = Array.isArray(names) ? names : [names];
+        for (const name of nameList) {
+            const idx = argv.indexOf(name);
+            if (idx !== -1 && idx + 1 < argv.length) return argv[idx + 1];
         }
-        return argv[idx + 1];
+        if (fallback !== undefined) return fallback;
+        fatal(`Missing required argument: ${nameList.join(' | ')}`);
     }
 
-    function getFlagOptional(name: string): string | null {
-        const idx = argv.indexOf(name);
-        if (idx === -1 || idx + 1 >= argv.length) return null;
-        return argv[idx + 1];
+    function getFlagOptional(names: string | string[]): string | null {
+        const nameList = Array.isArray(names) ? names : [names];
+        for (const name of nameList) {
+            const idx = argv.indexOf(name);
+            if (idx !== -1 && idx + 1 < argv.length) return argv[idx + 1];
+        }
+        return null;
     }
 
     return {
         command,
-        koiosUrl: getFlag('--koios-url', 'https://preprod.koios.rest/api/v1'),
-        blockfrostApiKey: getFlagOptional('--blockfrost-api-key') ?? process.env['BLOCKFROST_API_KEY'] ?? null,
-        signingKey: getFlag('--signing-key'),
-        nftPolicyId: getFlag('--nft-policy-id'),
-        registryAddress: getFlag('--registry-address'),
-        beaconPolicyId: getFlag('--beacon-policy'),
+        koiosUrl: getFlag(['--rpc-url', '--koios-url'], 'https://preprod.koios.rest/api/v1'),
+        signingKey: getFlag(['--mnemonic', '--signing-key']),
+        nftPolicyId: getFlag(['--nft-pubkey', '--nft-policy-id']),
+        registryAddress: getFlag(['--registry-pubkey', '--registry-address']),
+        beaconPolicyId: getFlag('--beacon-policy', ''),
+        scriptsPath: getFlag('--scripts-path', '/opt/blockhost/adapters/cardano/contracts/parameterized-scripts.json'),
         timeoutMs: Number(getFlag('--timeout', '600')) * 1000,
         serverKey: getFlagOptional('--server-key'),
     };
@@ -366,29 +379,36 @@ async function cmdRequest(args: Args): Promise<void> {
     const brokerPubBytes = Buffer.from(registry.eciesPubkey, 'hex');
     const brokerPubUncompressed =
         brokerPubBytes.length === 33
-            ? secp256k1.ProjectivePoint.fromHex(brokerPubBytes).toRawBytes(false)
+            ? secp256k1.Point.fromHex(Buffer.from(brokerPubBytes).toString('hex')).toBytes(false)
             : brokerPubBytes;
 
     const encrypted = eciesEncrypt(payload, brokerPubUncompressed);
-    const encryptedHex = Buffer.from(encrypted).toString('hex');
 
     log(`Encrypted payload: ${encrypted.length} bytes`);
 
-    // 5. Derive client pubkey hash from signing key
-    // TODO: Derive from signing key — for now use a placeholder
-    const clientPkh = 'TODO_DERIVE_FROM_SIGNING_KEY';
+    // 5. Load signing key and derive address
+    const signingKeyBytes = loadSigningKey(args.signingKey);
+    const clientPkh = deriveKeyHash(signingKeyBytes);
+    const networkId = args.koiosUrl.includes('preprod') ? types.NetworkId.TESTNET : types.NetworkId.MAINNET;
+    const clientAddress = deriveAddress(clientPkh, networkId);
+
+    log(`Client address: ${clientAddress.getBech32()}`);
+    log(`Client PKH: ${clientPkh.toString('hex')}`);
 
     // 6. Build and submit request transaction
-    // TODO: MeshJS transaction building
+    const scripts = JSON.parse(readFileSync(args.scriptsPath, 'utf-8'));
+    const txBuilder = new ClientTxBuilder(scripts, signingKeyBytes, networkId, args.koiosUrl);
+
     log('Submitting request transaction...');
-    log('TODO: MeshJS transaction building not yet implemented');
+    const requestTxHash = await txBuilder.submitRequest(args.nftPolicyId, encrypted);
+    log(`Request tx submitted: ${requestTxHash}`);
 
-    // Placeholder tx hash — would come from submitted transaction
-    const requestTxHash = 'TODO';
-
-    // Derive validator address from registry hash
-    // TODO: Derive from validator hash
-    const validatorAddress = 'TODO_DERIVE_FROM_HASH';
+    // Derive validator address from registry
+    const { address: addrLib } = await import('@stricahq/typhonjs');
+    const validatorAddress = new addrLib.EnterpriseAddress(networkId, {
+        hash: Buffer.from(registry.validatorHash, 'hex'),
+        type: types.HashType.SCRIPT,
+    }).getBech32();
 
     // 7. Save recovery state
     saveRecoveryState({
@@ -397,7 +417,7 @@ async function cmdRequest(args: Args): Promise<void> {
         requestTxHash,
         validatorAddress,
         beaconPolicyId: registry.beaconPolicyId,
-        clientPkh,
+        clientPkh: clientPkh.toString('hex'),
         wgPrivateKeyBase64: wgKeys.privateKeyBase64,
         wgPublicKeyBase64: wgKeys.publicKeyBase64,
         koiosUrl: args.koiosUrl,
@@ -410,7 +430,7 @@ async function cmdRequest(args: Args): Promise<void> {
             args.koiosUrl,
             validatorAddress,
             registry.beaconPolicyId,
-            clientPkh,
+            clientPkh.toString('hex'),
             serverKeys.privateKey,
             brokerPubUncompressed,
             args.timeoutMs,

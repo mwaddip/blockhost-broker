@@ -175,7 +175,7 @@ export interface WgKeypair {
 }
 
 export function generateWgKeypair(): WgKeypair {
-    const privateKey = x25519.utils.randomPrivateKey();
+    const privateKey = x25519.utils.randomSecretKey();
     const publicKey = x25519.getPublicKey(privateKey);
     return {
         privateKey,

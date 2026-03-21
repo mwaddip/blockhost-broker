@@ -1,16 +1,16 @@
 {
     "name": "blockhost-client-cardano",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "type": "module",
     "scripts": {
-        "build": "esbuild src/main.ts --bundle --platform=node --format=esm --outfile=dist/main.js --target=node22 --external:libsodium-sumo --external:libsodium-wrappers-sumo --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+        "build": "esbuild src/main.ts --bundle --platform=node --format=esm --outfile=dist/main.js --target=node22 --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
         "start": "node dist/main.js",
         "dev": "tsx src/main.ts",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "postinstall": "npx patch-package"
     },
     "dependencies": {
-        "@meshsdk/core": "^1.8.14",
-        "@meshsdk/provider": "^1.8.14",
+        "@stricahq/typhonjs": "^3.0.1",
         "@noble/ciphers": "^2.1.1",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1"
@@ -18,10 +18,8 @@
     "devDependencies": {
         "@types/node": "^22.0.0",
         "esbuild": "^0.27.3",
+        "patch-package": "^8.0.0",
         "tsx": "^4.0.0",
         "typescript": "^5.9.3"
-    },
-    "overrides": {
-        "libsodium-wrappers-sumo": "0.8.2"
     }
 }

@@ -14,6 +14,10 @@ import { loadConfig } from './config.js';
 import { EciesEncryption, serializeResponse, type ResponsePayload } from './crypto.js';
 import { RequestPoller, type RequestUtxo } from './poller.js';
 import { ResponseTxBuilder } from './tx-builder.js';
+import { Bip32PrivateKey } from '@stricahq/bip32ed25519';
+import { address, types } from '@stricahq/typhonjs';
+import * as bip39 from 'bip39';
+import { Buffer } from 'buffer';
 
 const config = loadConfig();
 
@@ -40,32 +44,36 @@ function saveState(processedRefs: Set<string>): void {
     fs.writeFileSync(config.stateFile, JSON.stringify(data) + '\n');
 }
 
-// ── Services ────────────────────────────────────────────────────────
+// ── Key derivation ──────────────────────────────────────────────────
 
-const encryption = new EciesEncryption(config.eciesPrivateKey);
-import { MeshWallet, resolvePaymentKeyHash } from '@meshsdk/core';
-import { KoiosProvider } from '@meshsdk/provider';
+async function deriveOperatorKey(mnemonic: string, networkId: types.NetworkId): Promise<{
+    signingKey: InstanceType<typeof Bip32PrivateKey>['toPrivateKey'] extends () => infer R ? R : never;
+    pkh: Buffer;
+    addr: types.ShelleyAddress;
+}> {
+    const entropy = Buffer.from(bip39.mnemonicToEntropy(mnemonic), 'hex');
+    const rootKey = await Bip32PrivateKey.fromEntropy(entropy);
 
-const meshProvider = new KoiosProvider(config.network === 'mainnet' ? 'api' : 'preprod');
-const operatorWallet = new MeshWallet({
-    networkId: config.network === 'mainnet' ? 1 : 0,
-    fetcher: meshProvider,
-    submitter: meshProvider,
-    key: { type: 'mnemonic', words: config.operatorMnemonic.split(' ') },
-});
-const operatorAddress = operatorWallet.getChangeAddress();
-const operatorPkh = resolvePaymentKeyHash(operatorAddress);
+    // Cardano BIP44: m/1852'/1815'/0'/0/0
+    const accountKey = rootKey
+        .derive(2147483648 + 1852)
+        .derive(2147483648 + 1815)
+        .derive(2147483648 + 0);
 
-const txBuilder = new ResponseTxBuilder(
-    operatorWallet,
-    config.validatorAddress,
-    config.beaconPolicyId,
-    config.koiosUrl,
-    config.blockfrostApiKey,
-    config.network,
-    config.blueprintPath,
-    operatorPkh,
-);
+    const paymentKey = accountKey.derive(0).derive(0);
+    const stakeKey = accountKey.derive(2).derive(0);
+    const signingKey = paymentKey.toPrivateKey();
+    const pkh = signingKey.toPublicKey().hash();
+    const stakePkh = stakeKey.toPrivateKey().toPublicKey().hash();
+
+    // Base address (with staking) — must match the address where funds were sent
+    const addr = new address.BaseAddress(networkId,
+        { hash: pkh, type: types.HashType.ADDRESS },
+        { hash: stakePkh, type: types.HashType.ADDRESS },
+    );
+
+    return { signingKey, pkh, addr };
+}
 
 // ── Broker API client ──────────────────────────────────────────────
 
@@ -103,6 +111,9 @@ async function requestAllocation(
 }
 
 // ── Request handler ─────────────────────────────────────────────────
+
+let txBuilder: ResponseTxBuilder;
+const encryption = new EciesEncryption(config.eciesPrivateKey);
 
 async function handleNewRequests(requests: RequestUtxo[]): Promise<void> {
     for (const req of requests) {
@@ -151,31 +162,37 @@ async function handleNewRequests(requests: RequestUtxo[]): Promise<void> {
     }
 }
 
-// ── Poller ───────────────────────────────────────────────────────────
-
-const poller = new RequestPoller(
-    config.koiosUrl,
-    config.blockfrostApiKey,
-    config.validatorAddress,
-    config.beaconPolicyId,
-    handleNewRequests,
-    (processedRefs) => {
-        saveState(processedRefs);
-        console.log(`[state] Saved ${processedRefs.size} processed refs`);
-    },
-);
-
 // ── Main ────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
     console.log(`[adapter] Cardano adapter starting`);
+
+    // Derive operator key
+    const networkId = config.network === 'mainnet' ? types.NetworkId.MAINNET : types.NetworkId.TESTNET;
+    const operator = await deriveOperatorKey(config.operatorMnemonic, networkId);
+    console.log(`[adapter] Operator: ${operator.addr.getBech32()}`);
+    console.log(`[adapter] Operator PKH: ${operator.pkh.toString('hex')}`);
+
+    // Load pre-parameterized scripts
+    const scripts = JSON.parse(fs.readFileSync(config.scriptsPath, 'utf-8'));
+
+    // Init tx builder
+    txBuilder = new ResponseTxBuilder(
+        scripts.broker,
+        scripts.beacon,
+        operator.signingKey,
+        operator.pkh,
+        operator.addr,
+        networkId,
+        config.koiosUrl,
+    );
+
     console.log(`[adapter] Validator: ${config.validatorAddress}`);
     console.log(`[adapter] Beacon policy: ${config.beaconPolicyId}`);
     console.log(`[adapter] ECIES pubkey: ${encryption.publicKeyHex().slice(0, 20)}...`);
     console.log(`[adapter] Broker API: ${config.brokerApiUrl}`);
     console.log(`[adapter] Source: ${config.source}`);
     console.log(`[adapter] Network: ${config.network}`);
-    console.log(`[adapter] Provider: ${config.blockfrostApiKey ? 'Blockfrost' : 'Koios'}`);
 
     // Restore state from previous run
     const refs = loadState();
@@ -195,6 +212,20 @@ async function main(): Promise<void> {
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
 }
+
+// ── Poller ───────────────────────────────────────────────────────────
+
+const poller = new RequestPoller(
+    config.koiosUrl,
+    config.blockfrostApiKey,
+    config.validatorAddress,
+    config.beaconPolicyId,
+    handleNewRequests,
+    (processedRefs) => {
+        saveState(processedRefs);
+        console.log(`[state] Saved ${processedRefs.size} processed refs`);
+    },
+);
 
 main().catch((err) => {
     console.error('[adapter] Fatal error:', err);

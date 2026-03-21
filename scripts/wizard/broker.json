@@ -34,6 +34,20 @@
           "has_auto_fetch": true
         }
       ]
+    },
+    "cardano": {
+      "wallet_pattern": "^addr(_test)?1[a-z0-9]{50,120}$",
+      "contract_validation": "^addr(_test)?1[a-z0-9]{50,120}$",
+      "fields": [
+        {
+          "name": "broker_registry",
+          "type": "text",
+          "label": "Registry Address",
+          "placeholder": "addr_test1...",
+          "hint": "The Cardano validator address holding the registry datum.",
+          "has_auto_fetch": true
+        }
+      ]
     }
   }
 }

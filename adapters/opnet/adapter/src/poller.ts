@@ -13,6 +13,9 @@ const ACTIVE_POLL_MS = 10_000; // 10 seconds
 /** Interval for idle polling (well before next block expected). */
 const IDLE_POLL_MS = 60_000; // 1 minute
 
+/** Maximum backoff when RPC is unreachable. */
+const MAX_BACKOFF_MS = 5 * 60_000; // 5 minutes
+
 /**
  * Block-aware poller for the BrokerRequests contract.
  *
@@ -30,6 +33,7 @@ export class RequestPoller {
     private lastBlockTimeMs: number = 0;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private running = false;
+    private consecutiveErrors = 0;
 
     constructor(
         private provider: JSONRpcProvider,
@@ -103,18 +107,14 @@ export class RequestPoller {
     }
 
     private async updateBlockInfo(): Promise<void> {
-        try {
-            const height = await this.provider.getBlockNumber();
-            if (height !== this.lastBlockHeight) {
-                const block = await this.provider.getBlock(height);
-                this.lastBlockHeight = height;
-                this.lastBlockTimeMs = Number(block.time);
-                console.log(
-                    `[poller] Block ${height} (${new Date(this.lastBlockTimeMs).toISOString()})`,
-                );
-            }
-        } catch (err) {
-            console.error('[poller] Failed to get block info:', err);
+        const height = await this.provider.getBlockNumber();
+        if (height !== this.lastBlockHeight) {
+            const block = await this.provider.getBlock(height);
+            this.lastBlockHeight = height;
+            this.lastBlockTimeMs = Number(block.time);
+            console.log(
+                `[poller] Block ${height} (${new Date(this.lastBlockTimeMs).toISOString()})`,
+            );
         }
     }
 
@@ -148,15 +148,32 @@ export class RequestPoller {
             let foundNew = 0;
             try {
                 foundNew = await this.poll();
+                this.consecutiveErrors = 0;
                 if (foundNew > 0) {
                     console.log(`[poller] Processed ${foundNew} new request(s)`);
                 }
             } catch (err) {
-                console.error('[poller] Poll error:', err);
+                this.consecutiveErrors++;
+                const msg = err instanceof Error ? err.message : String(err);
+                // One-liner on first error, then only every 30th to avoid log spam
+                if (this.consecutiveErrors === 1 || this.consecutiveErrors % 30 === 0) {
+                    console.error(`[poller] RPC error (${this.consecutiveErrors}x): ${msg}`);
+                }
             }
 
-            // If we found requests, poll again soon (same block might have more)
-            const nextDelay = foundNew > 0 ? ACTIVE_POLL_MS : this.getNextPollDelayMs();
+            let nextDelay: number;
+            if (this.consecutiveErrors > 0) {
+                // Exponential backoff: 10s, 20s, 40s, 80s, ... capped at 5min
+                nextDelay = Math.min(
+                    ACTIVE_POLL_MS * Math.pow(2, this.consecutiveErrors - 1),
+                    MAX_BACKOFF_MS,
+                );
+            } else if (foundNew > 0) {
+                // Found requests — poll again soon (same block might have more)
+                nextDelay = ACTIVE_POLL_MS;
+            } else {
+                nextDelay = this.getNextPollDelayMs();
+            }
             this.scheduleNext(nextDelay);
         }, delayMs);
     }
