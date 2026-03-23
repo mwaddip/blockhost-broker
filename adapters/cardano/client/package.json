@@ -10,7 +10,9 @@
         "postinstall": "npx patch-package"
     },
     "dependencies": {
+        "@stricahq/bip32ed25519": "^1.1.2",
         "@stricahq/typhonjs": "^3.0.1",
+        "bip39": "^3.1.0",
         "@noble/ciphers": "^2.1.1",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1"

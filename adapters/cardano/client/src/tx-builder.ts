@@ -8,10 +8,10 @@
  */
 
 import { Transaction, address, types, crypto } from '@stricahq/typhonjs';
+import { Bip32PrivateKey } from '@stricahq/bip32ed25519';
 import BigNumber from 'bignumber.js';
 import { Buffer } from 'buffer';
-import { ed25519 } from '@noble/curves/ed25519.js';
-import { blake2b } from '@noble/hashes/blake2.js';
+import * as bip39 from 'bip39';
 import { readFileSync, existsSync } from 'node:fs';
 
 const REQUEST_BEACON_NAME = Buffer.from('request').toString('hex');
@@ -30,55 +30,94 @@ interface ScriptsFile {
     beacon: ScriptInfo;
 }
 
+/** Abstraction over signing — works with both raw keys and mnemonic-derived keys. */
+export interface CardanoSigner {
+    pkh: Buffer;
+    addr: types.ShelleyAddress;
+    sign(data: Buffer): types.VKeyWitness;
+}
+
 /**
- * Load a signing key from hex string or file path.
- * Returns the raw 32-byte Ed25519 private key.
+ * Load wallet key material from string (inline value or file path).
+ * Detects format: BIP39 mnemonic (words) or raw 32-byte hex key.
  */
-export function loadSigningKey(keyOrPath: string): Uint8Array {
-    let hex: string;
+export async function loadSigner(
+    keyOrPath: string,
+    networkId: types.NetworkId,
+): Promise<CardanoSigner> {
+    let content: string;
     if (existsSync(keyOrPath)) {
-        hex = readFileSync(keyOrPath, 'utf-8').trim();
+        content = readFileSync(keyOrPath, 'utf-8').trim();
     } else {
-        hex = keyOrPath;
+        content = keyOrPath;
     }
-    if (hex.startsWith('0x')) hex = hex.slice(2);
-    const bytes = Buffer.from(hex, 'hex');
+
+    // Mnemonic: contains spaces (12/15/24 words)
+    if (content.includes(' ')) {
+        return deriveFromMnemonic(content, networkId);
+    }
+
+    // Raw hex key
+    if (content.startsWith('0x')) content = content.slice(2);
+    const bytes = Buffer.from(content, 'hex');
     if (bytes.length !== 32) {
         throw new Error(`Signing key must be 32 bytes, got ${bytes.length}`);
     }
-    return bytes;
+    return rawKeySigner(bytes, networkId);
 }
 
-/**
- * Derive payment key hash (Blake2b-224 of Ed25519 public key).
- */
-export function deriveKeyHash(privateKey: Uint8Array): Buffer {
+async function deriveFromMnemonic(mnemonic: string, networkId: types.NetworkId): Promise<CardanoSigner> {
+    const entropy = Buffer.from(bip39.mnemonicToEntropy(mnemonic), 'hex');
+    const rootKey = await Bip32PrivateKey.fromEntropy(entropy);
+    const accountKey = rootKey
+        .derive(2147483648 + 1852)
+        .derive(2147483648 + 1815)
+        .derive(2147483648 + 0);
+
+    const paymentKey = accountKey.derive(0).derive(0);
+    const stakeKey = accountKey.derive(2).derive(0);
+    const signingKey = paymentKey.toPrivateKey();
+    const pkh = signingKey.toPublicKey().hash();
+    const stakePkh = stakeKey.toPrivateKey().toPublicKey().hash();
+
+    const addr = new address.BaseAddress(networkId,
+        { hash: pkh, type: types.HashType.ADDRESS },
+        { hash: stakePkh, type: types.HashType.ADDRESS },
+    );
+
+    return {
+        pkh,
+        addr,
+        sign(data: Buffer): types.VKeyWitness {
+            return {
+                publicKey: signingKey.toPublicKey().toBytes(),
+                signature: signingKey.sign(data),
+            };
+        },
+    };
+}
+
+function rawKeySigner(privateKey: Uint8Array, networkId: types.NetworkId): CardanoSigner {
+    // Use dynamic import to avoid bundling ed25519 when only mnemonic path is used
+    const { ed25519 } = require('@noble/curves/ed25519.js');
+    const { blake2b } = require('@noble/hashes/blake2.js');
+
     const publicKey = ed25519.getPublicKey(privateKey);
-    return Buffer.from(blake2b(publicKey, { dkLen: 28 }));
-}
-
-/**
- * Derive a Cardano enterprise address from a payment key hash.
- */
-export function deriveAddress(
-    pkh: Buffer,
-    networkId: types.NetworkId,
-): address.EnterpriseAddress {
-    return new address.EnterpriseAddress(networkId, {
+    const pkh = Buffer.from(blake2b(publicKey, { dkLen: 28 }));
+    const addr = new address.EnterpriseAddress(networkId, {
         hash: pkh,
         type: types.HashType.ADDRESS,
     });
-}
 
-/**
- * Sign transaction data with a raw Ed25519 key.
- */
-function signTx(txHash: Buffer, privateKey: Uint8Array): types.VKeyWitness {
-    const publicKey = ed25519.getPublicKey(privateKey);
-    const signature = ed25519.sign(txHash, privateKey);
     return {
-        publicKey: Buffer.from(publicKey),
-        signature: Buffer.from(signature),
+        pkh,
+        addr,
+        sign(data: Buffer): types.VKeyWitness {
+            return {
+                publicKey: Buffer.from(publicKey),
+                signature: Buffer.from(ed25519.sign(data, privateKey)),
+            };
+        },
     };
 }
 
@@ -88,15 +127,15 @@ export class ClientTxBuilder {
     private brokerScriptHash: Buffer;
     private beaconPolicyId: string;
     private validatorAddress: address.EnterpriseAddress;
-    private signingKey: Uint8Array;
+    private signer: CardanoSigner;
     private clientPkh: Buffer;
-    private clientAddress: address.EnterpriseAddress;
+    private clientAddress: types.ShelleyAddress;
     private koiosUrl: string;
     private protocolParams: types.ProtocolParams | null = null;
 
     constructor(
         scripts: ScriptsFile,
-        signingKey: Uint8Array,
+        signer: CardanoSigner,
         networkId: types.NetworkId,
         koiosUrl: string,
     ) {
@@ -115,9 +154,9 @@ export class ClientTxBuilder {
             type: types.HashType.SCRIPT,
         });
 
-        this.signingKey = signingKey;
-        this.clientPkh = deriveKeyHash(signingKey);
-        this.clientAddress = deriveAddress(this.clientPkh, networkId);
+        this.signer = signer;
+        this.clientPkh = signer.pkh;
+        this.clientAddress = signer.addr;
         this.koiosUrl = koiosUrl;
     }
 
@@ -287,7 +326,7 @@ export class ClientTxBuilder {
         // ── 7. Sign and submit ──────────────────────────────────────────
 
         const txHashBuf = tx.getTransactionHash();
-        tx.addWitness(signTx(txHashBuf, this.signingKey));
+        tx.addWitness(this.signer.sign(txHashBuf));
 
         const result = tx.buildTransaction();
         console.error(`[tx] Request tx: ${result.hash}, ${result.payload.length / 2} bytes`);
@@ -435,7 +474,7 @@ export class ClientTxBuilder {
         // ── 6. Sign and submit ──────────────────────────────────────────
 
         const txHashBuf = tx.getTransactionHash();
-        tx.addWitness(signTx(txHashBuf, this.signingKey));
+        tx.addWitness(this.signer.sign(txHashBuf));
 
         const result = tx.buildTransaction();
         console.error(`[tx] Cleanup tx: ${result.hash}, ${result.payload.length / 2} bytes`);

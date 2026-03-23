@@ -29,9 +29,7 @@ import {
 } from './crypto.js';
 import {
     ClientTxBuilder,
-    loadSigningKey,
-    deriveKeyHash,
-    deriveAddress,
+    loadSigner,
 } from './tx-builder.js';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -387,17 +385,16 @@ async function cmdRequest(args: Args): Promise<void> {
     log(`Encrypted payload: ${encrypted.length} bytes`);
 
     // 5. Load signing key and derive address
-    const signingKeyBytes = loadSigningKey(args.signingKey);
-    const clientPkh = deriveKeyHash(signingKeyBytes);
     const networkId = args.koiosUrl.includes('preprod') ? types.NetworkId.TESTNET : types.NetworkId.MAINNET;
-    const clientAddress = deriveAddress(clientPkh, networkId);
+    const signer = await loadSigner(args.signingKey, networkId);
+    const clientPkh = signer.pkh;
 
-    log(`Client address: ${clientAddress.getBech32()}`);
+    log(`Client address: ${signer.addr.getBech32()}`);
     log(`Client PKH: ${clientPkh.toString('hex')}`);
 
     // 6. Build and submit request transaction
     const scripts = JSON.parse(readFileSync(args.scriptsPath, 'utf-8'));
-    const txBuilder = new ClientTxBuilder(scripts, signingKeyBytes, networkId, args.koiosUrl);
+    const txBuilder = new ClientTxBuilder(scripts, signer, networkId, args.koiosUrl);
 
     log('Submitting request transaction...');
     const requestTxHash = await txBuilder.submitRequest(args.nftPolicyId, encrypted);
