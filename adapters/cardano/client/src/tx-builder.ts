@@ -171,10 +171,8 @@ export class ClientTxBuilder {
     /**
      * Build and submit a request transaction.
      *
-     * - Include NFT UTXO as input (anti-spam — beacon policy checks tx.inputs)
-     * - Mint a request beacon
+     * - Mint a request beacon (validator checks client_pkh signed the tx)
      * - Send ADA + beacon to validator with RequestDatum (inline)
-     * - Return NFT to client
      */
     async submitRequest(
         nftPolicyId: string,
@@ -194,52 +192,27 @@ export class ClientTxBuilder {
             throw new Error('No UTXOs at client address');
         }
 
-        // Find NFT UTXO (anti-spam)
-        const nftUtxo = utxos.find(u =>
-            u.tokens.some(t => t.policyId === nftPolicyId),
-        );
-        if (!nftUtxo) {
-            throw new Error(`No UTXO with NFT policy ${nftPolicyId}`);
+        // Find ADA-only UTXOs for fees and collateral
+        const adaUtxos = utxos
+            .filter(u => u.tokens.length === 0)
+            .sort((a, b) => b.amount.minus(a.amount).toNumber());
+
+        if (adaUtxos.length === 0) {
+            throw new Error('No ADA-only UTXOs at client address');
         }
 
-        // Find collateral (ADA-only, >= 5 ADA)
-        const collateralUtxo = utxos.find(u =>
-            u.tokens.length === 0 && u.amount.gte(5_000_000),
-        );
-        if (!collateralUtxo) {
-            throw new Error('No ADA-only UTXO for collateral (need >= 5 ADA)');
-        }
-
-        // Find a fee input (ADA-only, different from collateral)
-        const feeUtxo = utxos.find(u =>
-            u.tokens.length === 0 &&
-            !(u.txId === collateralUtxo.txId && u.index === collateralUtxo.index),
-        ) || nftUtxo; // fallback to NFT UTXO if no other
-
-        // ── 1. NFT UTXO as input (anti-spam proof) ─────────────────────
+        // ── 1. Fee input ────────────────────────────────────────────────
 
         tx.addInput({
-            txId: nftUtxo.txId,
-            index: nftUtxo.index,
-            amount: nftUtxo.amount,
-            tokens: nftUtxo.tokens,
+            txId: adaUtxos[0].txId,
+            index: adaUtxos[0].index,
+            amount: adaUtxos[0].amount,
+            tokens: [],
             address: this.clientAddress,
         });
 
-        // Add separate fee input if different from NFT UTXO
-        if (feeUtxo.txId !== nftUtxo.txId || feeUtxo.index !== nftUtxo.index) {
-            tx.addInput({
-                txId: feeUtxo.txId,
-                index: feeUtxo.index,
-                amount: feeUtxo.amount,
-                tokens: feeUtxo.tokens,
-                address: this.clientAddress,
-            });
-        }
-
         // ── 2. Mint request beacon ──────────────────────────────────────
 
-        // MintRequestBeacon — BeaconAction constructor 0
         const mintRequestRedeemer: types.PlutusDataConstructor = {
             constructor: 0,
             fields: [],
@@ -256,7 +229,6 @@ export class ClientTxBuilder {
 
         // ── 3. Output to validator with RequestDatum + beacon ───────────
 
-        // RequestDatum { nft_policy_id, client_pkh, encrypted_payload } — constructor 0
         const requestDatum: types.PlutusDataConstructor = {
             constructor: 0,
             fields: [
@@ -284,44 +256,40 @@ export class ClientTxBuilder {
 
         tx.addOutput(validatorOutput);
 
-        // ── 4. Return NFT to client ─────────────────────────────────────
+        // ── 4. Required signer (beacon validator checks client_pkh signed) ──
 
-        const nftTokens = nftUtxo.tokens.filter(t => t.policyId === nftPolicyId);
-        if (nftTokens.length > 0) {
-            tx.addOutput({
-                amount: new BigNumber(2_000_000),
-                address: this.clientAddress,
-                tokens: nftTokens,
-            });
-        }
+        tx.addRequiredSigner({
+            hash: this.clientPkh,
+            type: types.HashType.ADDRESS,
+        });
 
         // ── 5. Collateral ───────────────────────────────────────────────
 
         tx.addCollateral({
-            txId: collateralUtxo.txId,
-            index: collateralUtxo.index,
-            amount: collateralUtxo.amount,
+            txId: adaUtxos[0].txId,
+            index: adaUtxos[0].index,
+            amount: adaUtxos[0].amount,
             address: this.clientAddress,
         });
 
         // ── 6. Fee and change ───────────────────────────────────────────
 
-        const fee = tx.calculateFee();
+        const preChangeOutput = tx.getOutputAmount().ada;
+        const changeOutput: types.Output = {
+            amount: new BigNumber(2_000_000),
+            address: this.clientAddress,
+            tokens: [],
+        };
+        tx.addOutput(changeOutput);
+
+        const fee = tx.calculateFee().times(1.1).integerValue(BigNumber.ROUND_CEIL);
         tx.setFee(fee);
 
-        const inputAmount = tx.getInputAmount();
-        const outputAmount = tx.getOutputAmount();
-        const changeAda = inputAmount.ada.minus(outputAmount.ada).minus(fee);
-
-        if (changeAda.gte(1_000_000)) {
-            // Return remaining tokens from NFT UTXO that aren't the NFT
-            const otherTokens = nftUtxo.tokens.filter(t => t.policyId !== nftPolicyId);
-            tx.addOutput({
-                amount: changeAda,
-                address: this.clientAddress,
-                tokens: otherTokens,
-            });
+        const changeAda = tx.getInputAmount().ada.minus(preChangeOutput).minus(fee);
+        if (changeAda.lt(1_000_000)) {
+            throw new Error(`Insufficient ADA for request tx (change would be ${changeAda})`);
         }
+        changeOutput.amount = changeAda;
 
         // ── 7. Sign and submit ──────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 use aiken/collection/list
 use cardano/address.{Script}
 use cardano/assets
-use cardano/transaction.{InlineDatum, Input, Output, Transaction}
+use cardano/transaction.{InlineDatum, Output, Transaction}
 use types.{
   BeaconAction, BurnRequestBeacon, BurnResponseBeacon, MintRequestBeacon,
   MintResponseBeacon, RequestDatum,
@@ -47,8 +47,9 @@ validator beacon(broker_validator_hash: ByteArray, operator_pkh: ByteArray) {
             },
           )
 
-        // The output must have an inline datum with a valid RequestDatum
-        // that references an NFT policy present in the tx inputs (anti-spam)
+        // The output must have an inline datum with a valid RequestDatum.
+        // The client_pkh in the datum must be a signer of this transaction,
+        // proving the requester controls that wallet.
         expect Some(beacon_output) =
           list.find(
             outputs_at_validator,
@@ -59,16 +60,10 @@ validator beacon(broker_validator_hash: ByteArray, operator_pkh: ByteArray) {
         expect InlineDatum(raw) = beacon_output.datum
         expect req: RequestDatum = raw
 
-        let nft_in_inputs =
-          list.any(
-            tx.inputs,
-            fn(i: Input) {
-              assets.policies(i.output.value)
-                |> list.has(req.nft_policy_id)
-            },
-          )
+        let client_signed =
+          list.has(tx.extra_signatories, req.client_pkh)
 
-        only_one && has_output && output_has_beacon && nft_in_inputs
+        only_one && has_output && output_has_beacon && client_signed
       }
 
       BurnRequestBeacon -> {
@@ -115,7 +110,7 @@ validator beacon(broker_validator_hash: ByteArray, operator_pkh: ByteArray) {
         let consumes_validator_utxo =
           list.any(
             tx.inputs,
-            fn(i: Input) {
+            fn(i) {
               i.output.address.payment_credential == validator_credential && assets.quantity_of(
                 i.output.value,
                 policy_id,
