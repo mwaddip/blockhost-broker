@@ -54,7 +54,28 @@ if [ -d "$OPNET_CLIENT/src" ]; then
     cp "$OPNET_CLIENT/dist/main.js" "$DEST/dist/"
 fi
 
-# (Future chain clients would be added here)
+# Cardano client (esbuild bundle — single file, no node_modules needed)
+CARDANO_CLIENT="${REPO_ROOT}/adapters/cardano/client"
+if [ -d "$CARDANO_CLIENT/src" ]; then
+    echo "Building Cardano client plugin..."
+    DEST="build/${PKG_NAME}/opt/blockhost/adapters/cardano/client"
+    mkdir -p "$DEST/dist"
+
+    if [ ! -d "$CARDANO_CLIENT/node_modules" ]; then
+        (cd "$CARDANO_CLIENT" && npm ci --ignore-scripts)
+    fi
+
+    (cd "$CARDANO_CLIENT" && npx patch-package)
+    (cd "$CARDANO_CLIENT" && npm run build)
+    cp "$CARDANO_CLIENT/dist/main.js" "$DEST/dist/"
+fi
+
+# Cardano parameterized scripts (needed by client at runtime)
+CARDANO_SCRIPTS="${REPO_ROOT}/adapters/cardano/contracts/parameterized-scripts.json"
+if [ -f "$CARDANO_SCRIPTS" ]; then
+    mkdir -p "build/${PKG_NAME}/opt/blockhost/adapters/cardano/contracts"
+    cp "$CARDANO_SCRIPTS" "build/${PKG_NAME}/opt/blockhost/adapters/cardano/contracts/"
+fi
 
 # ── Wizard integration hook ──────────────────────────────────────────
 
@@ -82,6 +103,7 @@ Description: Blockhost broker client for Proxmox servers
  Includes chain client plugins:
   - EVM (builtin, Python)
   - OPNet (Bitcoin L1, TypeScript subprocess)
+  - Cardano (TypeScript subprocess)
  .
  This package is installed on Proxmox servers that need IPv6
  connectivity through the Blockhost network.
