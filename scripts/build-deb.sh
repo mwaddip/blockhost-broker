@@ -137,6 +137,9 @@ EOF
 
 # ── Build ────────────────────────────────────────────────────────────
 
+# Clean up lockfile changes from npm ci (prevents dirty submodule on git pull)
+git -C "$REPO_ROOT" checkout -- '*/package-lock.json' 2>/dev/null || true
+
 dpkg-deb --build "build/${PKG_NAME}"
 
 echo ""
