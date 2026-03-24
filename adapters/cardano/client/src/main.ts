@@ -200,7 +200,11 @@ async function queryRegistryDatum(
     }
 
     // Find the UTXO with an inline datum
-    const registryUtxo = utxos.find((u: any) => u.inline_datum?.value);
+    // Pick the most recent registry UTXO (highest block) in case of multiple
+    const registryUtxos = utxos
+        .filter((u: any) => u.inline_datum?.value)
+        .sort((a: any, b: any) => (b.block_height ?? 0) - (a.block_height ?? 0));
+    const registryUtxo = registryUtxos[0];
     if (!registryUtxo) {
         throw new Error('No registry UTXO with inline datum found');
     }
