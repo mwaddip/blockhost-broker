@@ -233,7 +233,7 @@ async function watchForResponse(
 ): Promise<TunnelConfig> {
     log(`watchForResponse: timeout=${timeoutMs}ms (${timeoutMs / 1000}s)`);
     const deadline = Date.now() + timeoutMs;
-    const responseBeaconName = 'response';
+    const responseBeaconHex = Buffer.from('response').toString('hex'); // 726573706f6e7365
 
     while (Date.now() < deadline) {
         let utxos: any[];
@@ -253,7 +253,7 @@ async function watchForResponse(
             // Check for response beacon
             const assets = utxo.asset_list ?? [];
             const hasBeacon = assets.some(
-                (a: any) => a.policy_id === beaconPolicyId && a.asset_name_ascii === responseBeaconName,
+                (a: any) => a.policy_id === beaconPolicyId && a.asset_name === responseBeaconHex,
             );
             if (!hasBeacon) continue;
 
