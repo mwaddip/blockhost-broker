@@ -138,7 +138,7 @@ export class RequestPoller {
         return this.filterAndDecode(utxos, 'blockfrost');
     }
 
-    private filterAndDecode(utxos: any[], source: 'koios' | 'blockfrost'): RequestUtxo[] {
+    private async filterAndDecode(utxos: any[], source: 'koios' | 'blockfrost'): Promise<RequestUtxo[]> {
         const results: RequestUtxo[] = [];
 
         for (const utxo of utxos) {
@@ -147,7 +147,7 @@ export class RequestPoller {
             if (!hasBeacon) continue;
 
             // Decode inline datum
-            const datum = this.decodeDatum(utxo, source);
+            const datum = await this.decodeDatum(utxo, source);
             if (!datum) continue;
 
             const ref: UtxoRef = source === 'koios'
@@ -180,7 +180,7 @@ export class RequestPoller {
         }
     }
 
-    private decodeDatum(
+    private async decodeDatum(
         utxo: any,
         source: 'koios' | 'blockfrost',
     ): { nftPolicyId: string; clientPkh: string; encryptedPayload: string } | null {
@@ -191,9 +191,25 @@ export class RequestPoller {
                 // Koios returns inline_datum.value for extended queries
                 datumValue = utxo.inline_datum?.value;
             } else {
-                // Blockfrost returns inline_datum as CBOR — would need additional parsing
-                // For now, use Koios as the primary source
-                return null;
+                // Blockfrost: fetch datum via /scripts/datum/{hash}/cbor then decode,
+                // or use inline_datum JSON if available
+                if (utxo.inline_datum) {
+                    datumValue = utxo.inline_datum;
+                } else if (utxo.data_hash) {
+                    // Fetch datum JSON from Blockfrost
+                    const baseUrl = this.blockfrostApiKey!.includes('preview')
+                        ? 'https://cardano-preview.blockfrost.io/api/v0'
+                        : this.blockfrostApiKey!.includes('preprod')
+                          ? 'https://cardano-preprod.blockfrost.io/api/v0'
+                          : 'https://cardano-mainnet.blockfrost.io/api/v0';
+                    const resp = await fetch(`${baseUrl}/scripts/datum/${utxo.data_hash}`, {
+                        headers: { 'project_id': this.blockfrostApiKey! },
+                    });
+                    if (resp.ok) {
+                        const datum: any = await resp.json();
+                        datumValue = datum.json_value;
+                    }
+                }
             }
 
             if (!datumValue) return null;

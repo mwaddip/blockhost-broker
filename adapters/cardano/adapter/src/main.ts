@@ -185,6 +185,7 @@ async function main(): Promise<void> {
         operator.addr,
         networkId,
         config.koiosUrl,
+        config.blockfrostApiKey,
     );
 
     console.log(`[adapter] Validator: ${config.validatorAddress}`);

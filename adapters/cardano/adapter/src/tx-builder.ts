@@ -47,6 +47,7 @@ export class ResponseTxBuilder {
         operatorAddress: types.ShelleyAddress,
         private networkId: types.NetworkId,
         koiosUrl: string,
+        private blockfrostApiKey: string | null = null,
     ) {
         this.brokerScript = {
             cborHex: brokerInfo.cbor,
@@ -295,17 +296,53 @@ export class ResponseTxBuilder {
         return submittedHash;
     }
 
-    // ── Koios helpers ──────────────────────────────────────────────────
+    // ── Chain query helpers (Blockfrost primary, Koios fallback) ──────
+
+    private get bf(): string | null { return this.blockfrostApiKey; }
+
+    private bfUrl(path: string): string {
+        const key = this.bf!;
+        const base = key.includes('preview') ? 'https://cardano-preview.blockfrost.io/api/v0'
+            : key.includes('preprod') ? 'https://cardano-preprod.blockfrost.io/api/v0'
+            : 'https://cardano-mainnet.blockfrost.io/api/v0';
+        return `${base}${path}`;
+    }
+
+    private bfHeaders(): Record<string, string> {
+        return { 'project_id': this.bf! };
+    }
 
     private async fetchProtocolParams(): Promise<types.ProtocolParams> {
+        if (this.bf) {
+            const resp = await fetch(this.bfUrl('/epochs/latest/parameters'), { headers: this.bfHeaders() });
+            if (!resp.ok) throw new Error(`Blockfrost params ${resp.status}`);
+            const p: any = await resp.json();
+            return {
+                minFeeA: new BigNumber(p.min_fee_a),
+                minFeeB: new BigNumber(p.min_fee_b),
+                stakeKeyDeposit: new BigNumber(p.key_deposit),
+                lovelacePerUtxoWord: new BigNumber(0),
+                utxoCostPerByte: new BigNumber(p.coins_per_utxo_size),
+                collateralPercent: new BigNumber(p.collateral_percent),
+                priceSteps: new BigNumber(p.price_step),
+                priceMem: new BigNumber(p.price_mem),
+                languageView: {
+                    PlutusScriptV1: p.cost_models?.['PlutusV1'] ?? [],
+                    PlutusScriptV2: p.cost_models?.['PlutusV2'] ?? [],
+                    PlutusScriptV3: p.cost_models?.['PlutusV3'] ?? [],
+                },
+                maxTxSize: p.max_tx_size,
+                maxValueSize: parseInt(p.max_val_size),
+                minFeeRefScriptCostPerByte: new BigNumber(p.min_fee_ref_script_cost_per_byte ?? 15),
+            };
+        }
+
         const resp = await fetch(`${this.koiosUrl}/tip`);
         if (!resp.ok) throw new Error(`Koios tip ${resp.status}`);
         const tip = (await resp.json() as any[])[0];
-
         const epochResp = await fetch(`${this.koiosUrl}/epoch_params?_epoch_no=${tip.epoch_no}`);
         if (!epochResp.ok) throw new Error(`Koios epoch_params ${epochResp.status}`);
         const params = (await epochResp.json() as any[])[0];
-
         return {
             minFeeA: new BigNumber(params.min_fee_a),
             minFeeB: new BigNumber(params.min_fee_b),
@@ -327,6 +364,13 @@ export class ResponseTxBuilder {
     }
 
     private async fetchTipSlot(): Promise<number> {
+        if (this.bf) {
+            const resp = await fetch(this.bfUrl('/blocks/latest'), { headers: this.bfHeaders() });
+            if (!resp.ok) throw new Error(`Blockfrost tip ${resp.status}`);
+            const block: any = await resp.json();
+            return block.slot;
+        }
+
         const resp = await fetch(`${this.koiosUrl}/tip`);
         if (!resp.ok) throw new Error(`Koios tip ${resp.status}`);
         const tip = (await resp.json() as any[])[0];
@@ -339,6 +383,24 @@ export class ResponseTxBuilder {
         amount: BigNumber;
         tokens: types.Token[];
     }>> {
+        if (this.bf) {
+            const resp = await fetch(this.bfUrl(`/addresses/${addr}/utxos`), { headers: this.bfHeaders() });
+            if (!resp.ok) throw new Error(`Blockfrost utxos ${resp.status}`);
+            const utxos: any[] = await resp.json();
+            return utxos.map(u => ({
+                txId: u.tx_hash,
+                index: u.tx_index ?? u.output_index,
+                amount: new BigNumber((u.amount ?? []).find((a: any) => a.unit === 'lovelace')?.quantity ?? '0'),
+                tokens: (u.amount ?? [])
+                    .filter((a: any) => a.unit !== 'lovelace')
+                    .map((a: any) => ({
+                        policyId: a.unit.slice(0, 56),
+                        assetName: a.unit.slice(56),
+                        amount: new BigNumber(a.quantity),
+                    })),
+            }));
+        }
+
         const resp = await fetch(`${this.koiosUrl}/address_utxos`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -346,25 +408,37 @@ export class ResponseTxBuilder {
         });
         if (!resp.ok) throw new Error(`Koios address_utxos ${resp.status}`);
         const utxos: any[] = await resp.json();
-
         return utxos.map(u => ({
             txId: u.tx_hash,
             index: u.tx_index,
             amount: new BigNumber(u.value),
             tokens: (u.asset_list ?? []).map((a: any) => ({
                 policyId: a.policy_id,
-                assetName: Buffer.from(a.asset_name ?? '', 'utf-8').toString('hex'),
+                assetName: a.asset_name ?? '',
                 amount: new BigNumber(a.quantity),
             })),
         }));
     }
 
     private async submitTx(cborHex: string): Promise<string> {
-        const txBytes = Buffer.from(cborHex, 'hex');
+        if (this.bf) {
+            const resp = await fetch(this.bfUrl('/tx/submit'), {
+                method: 'POST',
+                headers: { ...this.bfHeaders(), 'Content-Type': 'application/cbor' },
+                body: Buffer.from(cborHex, 'hex'),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error(`Blockfrost submit ${resp.status}: ${text}`);
+            }
+            const hash = await resp.text();
+            return hash.replace(/"/g, '').trim();
+        }
+
         const resp = await fetch(`${this.koiosUrl}/submittx`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/cbor' },
-            body: txBytes,
+            body: Buffer.from(cborHex, 'hex'),
         });
         if (!resp.ok) {
             const text = await resp.text();
