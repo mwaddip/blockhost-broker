@@ -27,7 +27,10 @@ function refKey(ref: UtxoRef): string {
 
 export class RequestPoller {
     private processedRefs = new Set<string>();
-    private timer: ReturnType<typeof setInterval> | null = null;
+    private timer: ReturnType<typeof setTimeout> | null = null;
+    private consecutiveErrors = 0;
+    private pollIntervalMs = 20_000;
+    private static readonly MAX_BACKOFF_MS = 5 * 60_000;
 
     constructor(
         private koiosUrl: string,
@@ -43,35 +46,51 @@ export class RequestPoller {
     }
 
     start(intervalMs: number): void {
+        this.pollIntervalMs = intervalMs;
         console.log(`[poller] Starting with ${intervalMs}ms interval`);
-        this.poll(); // immediate first poll
-        this.timer = setInterval(() => this.poll(), intervalMs);
+        this.scheduleNext(0);
     }
 
     stop(): void {
         if (this.timer) {
-            clearInterval(this.timer);
+            clearTimeout(this.timer);
             this.timer = null;
         }
     }
 
-    private async poll(): Promise<void> {
-        try {
-            const utxos = await this.fetchRequestUtxos();
-            const newRequests = utxos.filter((u) => !this.processedRefs.has(refKey(u.ref)));
+    private scheduleNext(delayMs: number): void {
+        this.timer = setTimeout(async () => {
+            this.timer = null;
 
-            if (newRequests.length > 0) {
-                console.log(`[poller] Found ${newRequests.length} new request(s)`);
-                await this.onNewRequests(newRequests);
+            try {
+                const utxos = await this.fetchRequestUtxos();
+                const newRequests = utxos.filter((u) => !this.processedRefs.has(refKey(u.ref)));
 
-                for (const req of newRequests) {
-                    this.processedRefs.add(refKey(req.ref));
+                if (newRequests.length > 0) {
+                    console.log(`[poller] Found ${newRequests.length} new request(s)`);
+                    await this.onNewRequests(newRequests);
+
+                    for (const req of newRequests) {
+                        this.processedRefs.add(refKey(req.ref));
+                    }
+                    this.onStateChange?.(this.processedRefs);
                 }
-                this.onStateChange?.(this.processedRefs);
+
+                this.consecutiveErrors = 0;
+                this.scheduleNext(this.pollIntervalMs);
+            } catch (err) {
+                this.consecutiveErrors++;
+                const msg = err instanceof Error ? err.message : String(err);
+                if (this.consecutiveErrors === 1 || this.consecutiveErrors % 30 === 0) {
+                    console.error(`[poller] RPC error (${this.consecutiveErrors}x): ${msg}`);
+                }
+                const backoff = Math.min(
+                    this.pollIntervalMs * Math.pow(2, this.consecutiveErrors - 1),
+                    RequestPoller.MAX_BACKOFF_MS,
+                );
+                this.scheduleNext(backoff);
             }
-        } catch (err) {
-            console.error('[poller] Poll error:', err);
-        }
+        }, delayMs);
     }
 
     private async fetchRequestUtxos(): Promise<RequestUtxo[]> {
