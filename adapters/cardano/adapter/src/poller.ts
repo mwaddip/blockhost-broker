@@ -191,25 +191,22 @@ export class RequestPoller {
                 // Koios returns inline_datum.value for extended queries
                 datumValue = utxo.inline_datum?.value;
             } else {
-                // Blockfrost: fetch datum via /scripts/datum/{hash}/cbor then decode,
-                // or use inline_datum JSON if available
-                if (utxo.inline_datum) {
-                    datumValue = utxo.inline_datum;
-                } else if (utxo.data_hash) {
-                    // Fetch datum JSON from Blockfrost
-                    const baseUrl = this.blockfrostApiKey!.includes('preview')
-                        ? 'https://cardano-preview.blockfrost.io/api/v0'
-                        : this.blockfrostApiKey!.includes('preprod')
-                          ? 'https://cardano-preprod.blockfrost.io/api/v0'
-                          : 'https://cardano-mainnet.blockfrost.io/api/v0';
-                    const resp = await fetch(`${baseUrl}/scripts/datum/${utxo.data_hash}`, {
-                        headers: { 'project_id': this.blockfrostApiKey! },
-                    });
-                    if (resp.ok) {
-                        const datum: any = await resp.json();
-                        datumValue = datum.json_value;
-                    }
-                }
+                // Blockfrost: inline_datum is CBOR hex, not JSON.
+                // Use data_hash to fetch parsed JSON from the datum endpoint.
+                const datumHash = utxo.data_hash;
+                if (!datumHash) return null;
+
+                const baseUrl = this.blockfrostApiKey!.includes('preview')
+                    ? 'https://cardano-preview.blockfrost.io/api/v0'
+                    : this.blockfrostApiKey!.includes('preprod')
+                      ? 'https://cardano-preprod.blockfrost.io/api/v0'
+                      : 'https://cardano-mainnet.blockfrost.io/api/v0';
+                const resp = await fetch(`${baseUrl}/scripts/datum/${datumHash}`, {
+                    headers: { 'project_id': this.blockfrostApiKey! },
+                });
+                if (!resp.ok) return null;
+                const datum: any = await resp.json();
+                datumValue = datum.json_value;
             }
 
             if (!datumValue) return null;

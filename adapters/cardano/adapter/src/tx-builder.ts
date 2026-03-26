@@ -11,6 +11,7 @@
 import { Transaction, address, types, crypto } from '@stricahq/typhonjs';
 import BigNumber from 'bignumber.js';
 import { Buffer } from 'buffer';
+import { readFileSync, existsSync } from 'node:fs';
 import type { PrivateKey } from '@stricahq/bip32ed25519';
 import type { RequestUtxo } from './poller.js';
 
@@ -313,36 +314,27 @@ export class ResponseTxBuilder {
     }
 
     private async fetchProtocolParams(): Promise<types.ProtocolParams> {
-        if (this.bf) {
-            const resp = await fetch(this.bfUrl('/epochs/latest/parameters'), { headers: this.bfHeaders() });
-            if (!resp.ok) throw new Error(`Blockfrost params ${resp.status}`);
-            const p: any = await resp.json();
-            return {
-                minFeeA: new BigNumber(p.min_fee_a),
-                minFeeB: new BigNumber(p.min_fee_b),
-                stakeKeyDeposit: new BigNumber(p.key_deposit),
-                lovelacePerUtxoWord: new BigNumber(0),
-                utxoCostPerByte: new BigNumber(p.coins_per_utxo_size),
-                collateralPercent: new BigNumber(p.collateral_percent),
-                priceSteps: new BigNumber(p.price_step),
-                priceMem: new BigNumber(p.price_mem),
-                languageView: {
-                    PlutusScriptV1: p.cost_models?.['PlutusV1'] ?? [],
-                    PlutusScriptV2: p.cost_models?.['PlutusV2'] ?? [],
-                    PlutusScriptV3: p.cost_models?.['PlutusV3'] ?? [],
-                },
-                maxTxSize: p.max_tx_size,
-                maxValueSize: parseInt(p.max_val_size),
-                minFeeRefScriptCostPerByte: new BigNumber(p.min_fee_ref_script_cost_per_byte ?? 15),
-            };
+        // Try cached file first (avoids rate limits; updated on hard forks)
+        const cachedPath = '/opt/blockhost/adapters/cardano/contracts/protocol-params.json';
+        if (existsSync(cachedPath)) {
+            try {
+                const params = JSON.parse(readFileSync(cachedPath, 'utf-8'));
+                console.log('[tx-builder] Using cached protocol params');
+                return this.parseKoiosParams(params);
+            } catch { /* fall through to network fetch */ }
         }
 
+        // Fallback: fetch from Koios (cost models must be arrays, not named dicts)
         const resp = await fetch(`${this.koiosUrl}/tip`);
         if (!resp.ok) throw new Error(`Koios tip ${resp.status}`);
         const tip = (await resp.json() as any[])[0];
         const epochResp = await fetch(`${this.koiosUrl}/epoch_params?_epoch_no=${tip.epoch_no}`);
         if (!epochResp.ok) throw new Error(`Koios epoch_params ${epochResp.status}`);
         const params = (await epochResp.json() as any[])[0];
+        return this.parseKoiosParams(params);
+    }
+
+    private parseKoiosParams(params: any): types.ProtocolParams {
         return {
             minFeeA: new BigNumber(params.min_fee_a),
             minFeeB: new BigNumber(params.min_fee_b),
