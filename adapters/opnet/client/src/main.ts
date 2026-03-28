@@ -193,6 +193,7 @@ interface RecoveryState {
     startBlock: string;           // bigint as string
     wgPrivateKeyBase64: string;
     wgPublicKeyBase64: string;
+    brokerWallet: string;
     savedAt: string;
 }
 
@@ -203,6 +204,7 @@ function saveRecoveryState(
     brokerPubUncompressed: Uint8Array,
     startBlock: bigint,
     wgKeys: { privateKeyBase64: string; publicKeyBase64: string },
+    brokerWallet: string,
 ): void {
     const state: RecoveryState = {
         serverPrivkeyHex: Buffer.from(serverKeys.privateKey).toString('hex'),
@@ -210,6 +212,7 @@ function saveRecoveryState(
         startBlock: startBlock.toString(),
         wgPrivateKeyBase64: wgKeys.privateKeyBase64,
         wgPublicKeyBase64: wgKeys.publicKeyBase64,
+        brokerWallet,
         savedAt: new Date().toISOString(),
     };
     mkdirSync(dirname(RECOVERY_FILE), { recursive: true });
@@ -293,6 +296,7 @@ async function cmdRequest(args: Args): Promise<void> {
                 broker_endpoint: recovered.brokerEndpoint,
                 wg_private_key: recovered.wgPrivateKeyBase64,
                 wg_public_key: recovered.wgPublicKeyBase64,
+                broker_wallet: recovery.brokerWallet,
             };
             process.stdout.write(JSON.stringify(result) + '\n');
             await provider.close();
@@ -403,7 +407,7 @@ async function cmdRequest(args: Args): Promise<void> {
     log(`Watching for response from block ${startBlock}...`);
 
     // Save recovery state so a retry can find the response if we time out
-    saveRecoveryState(serverKeys, brokerPubUncompressed, startBlock, wgKeys);
+    saveRecoveryState(serverKeys, brokerPubUncompressed, startBlock, wgKeys, broker.operator.toHex());
 
     try {
         const config = await watchForResponse(
@@ -424,6 +428,7 @@ async function cmdRequest(args: Args): Promise<void> {
             broker_endpoint: config.brokerEndpoint,
             wg_private_key: wgKeys.privateKeyBase64,
             wg_public_key: wgKeys.publicKeyBase64,
+            broker_wallet: broker.operator.toHex(),
         };
 
         process.stdout.write(JSON.stringify(result) + '\n');
