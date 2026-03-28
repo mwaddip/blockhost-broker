@@ -126,6 +126,7 @@ interface RecoveryState {
     validatorAddress: string;
     beaconPolicyId: string;
     clientPkh: string;
+    operatorPkh: string;
     wgPrivateKeyBase64: string;
     wgPublicKeyBase64: string;
     koiosUrl: string;
@@ -297,6 +298,7 @@ async function attemptRecovery(
     gateway: string;
     wgPrivateKeyBase64: string;
     wgPublicKeyBase64: string;
+    brokerWallet: string;
 } | null> {
     log(`Attempting recovery (saved ${state.savedAt})`);
 
@@ -318,6 +320,7 @@ async function attemptRecovery(
             ...config,
             wgPrivateKeyBase64: state.wgPrivateKeyBase64,
             wgPublicKeyBase64: state.wgPublicKeyBase64,
+            brokerWallet: buildEnterpriseAddress(state.operatorPkh, 'preprod', false),
         };
     } catch {
         log('Recovery scan found no response');
@@ -342,6 +345,7 @@ async function cmdRequest(args: Args): Promise<void> {
                 broker_endpoint: recovered.brokerEndpoint,
                 wg_private_key: recovered.wgPrivateKeyBase64,
                 wg_public_key: recovered.wgPublicKeyBase64,
+                broker_wallet: recovered.brokerWallet,
             }) + '\n');
             return;
         }
@@ -414,7 +418,8 @@ async function cmdRequest(args: Args): Promise<void> {
         requestTxHash,
         validatorAddress,
         beaconPolicyId: registry.beaconPolicyId,
-        clientPkh: clientPkh.toString('hex'),
+        clientPkh: clientPkh,
+        operatorPkh: registry.operatorPkh,
         wgPrivateKeyBase64: wgKeys.privateKeyBase64,
         wgPublicKeyBase64: wgKeys.publicKeyBase64,
         koiosUrl: args.koiosUrl,
@@ -442,6 +447,7 @@ async function cmdRequest(args: Args): Promise<void> {
             broker_endpoint: config.brokerEndpoint,
             wg_private_key: wgKeys.privateKeyBase64,
             wg_public_key: wgKeys.publicKeyBase64,
+            broker_wallet: buildEnterpriseAddress(registry.operatorPkh, network as any, false),
         }) + '\n');
     } catch (e) {
         log(`Watch failed: ${e} — recovery state preserved at ${RECOVERY_FILE}`);
