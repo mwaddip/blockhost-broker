@@ -14,9 +14,10 @@ import { loadConfig } from './config.js';
 import { EciesEncryption, serializeResponse, type ResponsePayload } from './crypto.js';
 import { RequestPoller, type RequestUtxo } from './poller.js';
 import { ResponseTxBuilder } from './tx-builder.js';
-import { Bip32PrivateKey } from '@stricahq/bip32ed25519';
-import { address, types } from '@stricahq/typhonjs';
-import * as bip39 from 'bip39';
+import { Bip32PrivateKey } from 'noble-bip32ed25519';
+import { buildBaseAddress } from 'cmttk/address';
+import { mnemonicToEntropy } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { Buffer } from 'buffer';
 
 const config = loadConfig();
@@ -46,13 +47,13 @@ function saveState(processedRefs: Set<string>): void {
 
 // ── Key derivation ──────────────────────────────────────────────────
 
-async function deriveOperatorKey(mnemonic: string, networkId: types.NetworkId): Promise<{
-    signingKey: InstanceType<typeof Bip32PrivateKey>['toPrivateKey'] extends () => infer R ? R : never;
+function deriveOperatorKey(mnemonic: string, network: string): {
+    signingKey: ReturnType<ReturnType<typeof Bip32PrivateKey.prototype.derive>['toPrivateKey']>;
     pkh: Buffer;
-    addr: types.ShelleyAddress;
-}> {
-    const entropy = Buffer.from(bip39.mnemonicToEntropy(mnemonic), 'hex');
-    const rootKey = await Bip32PrivateKey.fromEntropy(entropy);
+    addr: string;
+} {
+    const entropy = mnemonicToEntropy(mnemonic, wordlist);
+    const rootKey = Bip32PrivateKey.fromEntropy(entropy);
 
     // Cardano BIP44: m/1852'/1815'/0'/0/0
     const accountKey = rootKey
@@ -63,14 +64,10 @@ async function deriveOperatorKey(mnemonic: string, networkId: types.NetworkId): 
     const paymentKey = accountKey.derive(0).derive(0);
     const stakeKey = accountKey.derive(2).derive(0);
     const signingKey = paymentKey.toPrivateKey();
-    const pkh = signingKey.toPublicKey().hash();
-    const stakePkh = stakeKey.toPrivateKey().toPublicKey().hash();
+    const pkh = Buffer.from(signingKey.toPublicKey().hash());
+    const stakePkh = Buffer.from(stakeKey.toPrivateKey().toPublicKey().hash());
 
-    // Base address (with staking) — must match the address where funds were sent
-    const addr = new address.BaseAddress(networkId,
-        { hash: pkh, type: types.HashType.ADDRESS },
-        { hash: stakePkh, type: types.HashType.ADDRESS },
-    );
+    const addr = buildBaseAddress(pkh.toString('hex'), stakePkh.toString('hex'), network as any);
 
     return { signingKey, pkh, addr };
 }
@@ -168,9 +165,9 @@ async function main(): Promise<void> {
     console.log(`[adapter] Cardano adapter starting`);
 
     // Derive operator key
-    const networkId = config.network === 'mainnet' ? types.NetworkId.MAINNET : types.NetworkId.TESTNET;
-    const operator = await deriveOperatorKey(config.operatorMnemonic, networkId);
-    console.log(`[adapter] Operator: ${operator.addr.getBech32()}`);
+    const network = config.network === 'mainnet' ? 'mainnet' : 'preprod';
+    const operator = deriveOperatorKey(config.operatorMnemonic, network);
+    console.log(`[adapter] Operator: ${operator.addr}`);
     console.log(`[adapter] Operator PKH: ${operator.pkh.toString('hex')}`);
 
     // Load pre-parameterized scripts
@@ -180,10 +177,10 @@ async function main(): Promise<void> {
     txBuilder = new ResponseTxBuilder(
         scripts.broker,
         scripts.beacon,
-        operator.signingKey,
+        operator.signingKey.toBytes(),
         operator.pkh,
         operator.addr,
-        networkId,
+        network,
         config.koiosUrl,
         config.blockfrostApiKey,
     );

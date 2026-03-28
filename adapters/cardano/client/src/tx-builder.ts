@@ -1,24 +1,24 @@
 /**
  * Client-side transaction building for Cardano.
  *
- * Builds request transactions (send to validator with datum + mint beacon)
+ * Builds request transactions (mint beacon + send to validator with datum)
  * and cleanup transactions (consume response UTXO + burn beacon).
  *
- * Uses TyphonJS (pure JS, no WASM) for transaction building.
+ * Uses cmttk (pure JS, no WASM) for transaction building.
  */
 
-import { Transaction, address, types, crypto } from '@stricahq/typhonjs';
-import { Bip32PrivateKey } from '@stricahq/bip32ed25519';
-import BigNumber from 'bignumber.js';
-import { Buffer } from 'buffer';
-import * as bip39 from 'bip39';
+import { buildAndSubmitScriptTx, type MintEntry, type TxOutput, type ScriptInput } from 'cmttk/tx';
+import { Constr, Data } from 'cmttk/data';
+import { getProvider, type Provider } from 'cmttk/provider';
+import { buildBaseAddress, buildEnterpriseAddress } from 'cmttk/address';
+import { Bip32PrivateKey } from 'noble-bip32ed25519';
+import { mnemonicToEntropy } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { readFileSync, existsSync } from 'node:fs';
+import { Buffer } from 'buffer';
 
 const REQUEST_BEACON_NAME = Buffer.from('request').toString('hex');
 const RESPONSE_BEACON_NAME = Buffer.from('response').toString('hex');
-
-const SPEND_EX_UNITS: types.ExUnits = { mem: 800_000, steps: 300_000_000 };
-const MINT_EX_UNITS: types.ExUnits = { mem: 800_000, steps: 300_000_000 };
 
 interface ScriptInfo {
     cbor: string;
@@ -32,19 +32,20 @@ interface ScriptsFile {
 
 /** Abstraction over signing — works with both raw keys and mnemonic-derived keys. */
 export interface CardanoSigner {
-    pkh: Buffer;
-    addr: types.ShelleyAddress;
-    sign(data: Buffer): types.VKeyWitness;
+    pkh: string;
+    addr: string;
+    /** 64-byte extended signing key (kL + kR) for cmttk */
+    signingKeyBytes: Uint8Array;
 }
 
 /**
  * Load wallet key material from string (inline value or file path).
  * Detects format: BIP39 mnemonic (words) or raw 32-byte hex key.
  */
-export async function loadSigner(
+export function loadSigner(
     keyOrPath: string,
-    networkId: types.NetworkId,
-): Promise<CardanoSigner> {
+    network: string,
+): CardanoSigner {
     let content: string;
     if (existsSync(keyOrPath)) {
         content = readFileSync(keyOrPath, 'utf-8').trim();
@@ -54,7 +55,7 @@ export async function loadSigner(
 
     // Mnemonic: contains spaces (12/15/24 words)
     if (content.includes(' ')) {
-        return deriveFromMnemonic(content, networkId);
+        return deriveFromMnemonic(content, network);
     }
 
     // Raw hex key
@@ -63,12 +64,12 @@ export async function loadSigner(
     if (bytes.length !== 32) {
         throw new Error(`Signing key must be 32 bytes, got ${bytes.length}`);
     }
-    return rawKeySigner(bytes, networkId);
+    return rawKeySigner(bytes, network);
 }
 
-async function deriveFromMnemonic(mnemonic: string, networkId: types.NetworkId): Promise<CardanoSigner> {
-    const entropy = Buffer.from(bip39.mnemonicToEntropy(mnemonic), 'hex');
-    const rootKey = await Bip32PrivateKey.fromEntropy(entropy);
+function deriveFromMnemonic(mnemonic: string, network: string): CardanoSigner {
+    const entropy = mnemonicToEntropy(mnemonic, wordlist);
+    const rootKey = Bip32PrivateKey.fromEntropy(entropy);
     const accountKey = rootKey
         .derive(2147483648 + 1852)
         .derive(2147483648 + 1815)
@@ -77,95 +78,60 @@ async function deriveFromMnemonic(mnemonic: string, networkId: types.NetworkId):
     const paymentKey = accountKey.derive(0).derive(0);
     const stakeKey = accountKey.derive(2).derive(0);
     const signingKey = paymentKey.toPrivateKey();
-    const pkh = signingKey.toPublicKey().hash();
-    const stakePkh = stakeKey.toPrivateKey().toPublicKey().hash();
+    const pkh = Buffer.from(signingKey.toPublicKey().hash()).toString('hex');
+    const stakePkh = Buffer.from(stakeKey.toPrivateKey().toPublicKey().hash()).toString('hex');
 
-    const addr = new address.BaseAddress(networkId,
-        { hash: pkh, type: types.HashType.ADDRESS },
-        { hash: stakePkh, type: types.HashType.ADDRESS },
-    );
+    const addr = buildBaseAddress(pkh, stakePkh, network as any);
 
-    return {
-        pkh,
-        addr,
-        sign(data: Buffer): types.VKeyWitness {
-            return {
-                publicKey: signingKey.toPublicKey().toBytes(),
-                signature: signingKey.sign(data),
-            };
-        },
-    };
+    return { pkh, addr, signingKeyBytes: signingKey.toBytes() };
 }
 
-function rawKeySigner(privateKey: Uint8Array, networkId: types.NetworkId): CardanoSigner {
-    // Use dynamic import to avoid bundling ed25519 when only mnemonic path is used
+function rawKeySigner(privateKey: Uint8Array, network: string): CardanoSigner {
     const { ed25519 } = require('@noble/curves/ed25519.js');
     const { blake2b } = require('@noble/hashes/blake2.js');
 
     const publicKey = ed25519.getPublicKey(privateKey);
-    const pkh = Buffer.from(blake2b(publicKey, { dkLen: 28 }));
-    const addr = new address.EnterpriseAddress(networkId, {
-        hash: pkh,
-        type: types.HashType.ADDRESS,
-    });
+    const pkh = Buffer.from(blake2b(publicKey, { dkLen: 28 })).toString('hex');
+    const addr = buildEnterpriseAddress(pkh, network as any, false);
 
-    return {
-        pkh,
-        addr,
-        sign(data: Buffer): types.VKeyWitness {
-            return {
-                publicKey: Buffer.from(publicKey),
-                signature: Buffer.from(ed25519.sign(data, privateKey)),
-            };
-        },
-    };
+    // cmttk expects 64-byte kL+kR for Ed25519-BIP32 signing.
+    // For raw Ed25519 keys, pad with zeros for kR (only kL is used for signing).
+    const extendedKey = new Uint8Array(64);
+    extendedKey.set(privateKey, 0);
+
+    return { pkh, addr, signingKeyBytes: extendedKey };
 }
 
 export class ClientTxBuilder {
-    private brokerScript: types.PlutusScript;
-    private beaconScript: types.PlutusScript;
-    private brokerScriptHash: Buffer;
+    private brokerScriptCbor: string;
+    private beaconScriptCbor: string;
     private beaconPolicyId: string;
-    private validatorAddress: address.EnterpriseAddress;
+    private validatorAddress: string;
     private signer: CardanoSigner;
-    private clientPkh: Buffer;
-    private clientAddress: types.ShelleyAddress;
-    private koiosUrl: string;
-    private protocolParams: types.ProtocolParams | null = null;
+    private network: string;
+    private provider: Provider;
 
     constructor(
         scripts: ScriptsFile,
         signer: CardanoSigner,
-        networkId: types.NetworkId,
+        network: string,
         koiosUrl: string,
     ) {
-        this.brokerScript = {
-            cborHex: scripts.broker.cbor,
-            type: types.PlutusScriptType.PlutusScriptV3,
-        };
-        this.beaconScript = {
-            cborHex: scripts.beacon.cbor,
-            type: types.PlutusScriptType.PlutusScriptV3,
-        };
-        this.brokerScriptHash = Buffer.from(scripts.broker.hash, 'hex');
+        this.brokerScriptCbor = scripts.broker.cbor;
+        this.beaconScriptCbor = scripts.beacon.cbor;
         this.beaconPolicyId = scripts.beacon.hash;
-        this.validatorAddress = new address.EnterpriseAddress(networkId, {
-            hash: this.brokerScriptHash,
-            type: types.HashType.SCRIPT,
-        });
-
+        this.validatorAddress = buildEnterpriseAddress(scripts.broker.hash, network as any, true);
         this.signer = signer;
-        this.clientPkh = signer.pkh;
-        this.clientAddress = signer.addr;
-        this.koiosUrl = koiosUrl;
+        this.network = network;
+        this.provider = getProvider(network as any, undefined, koiosUrl);
     }
 
     getClientPkh(): string {
-        return this.clientPkh.toString('hex');
+        return this.signer.pkh;
     }
 
     getClientAddress(): string {
-        return this.clientAddress.getBech32();
+        return this.signer.addr;
     }
 
     /**
@@ -178,128 +144,48 @@ export class ClientTxBuilder {
         nftPolicyId: string,
         encryptedPayload: Uint8Array,
     ): Promise<string> {
-        if (!this.protocolParams) {
-            this.protocolParams = await this.fetchProtocolParams();
-        }
+        // MintRequestBeacon — BeaconAction constructor 0
+        const mintRedeemer = Data.to(new Constr(0, []));
 
-        const tx = new Transaction({ protocolParams: this.protocolParams });
-        const tipSlot = await this.fetchTipSlot();
-        tx.setTTL(tipSlot + 600);
-
-        // Fetch client UTXOs
-        const utxos = await this.fetchUtxos(this.clientAddress.getBech32());
-        if (utxos.length === 0) {
-            throw new Error('No UTXOs at client address');
-        }
-
-        // Find ADA-only UTXOs for fees and collateral
-        const adaUtxos = utxos
-            .filter(u => u.tokens.length === 0)
-            .sort((a, b) => b.amount.minus(a.amount).toNumber());
-
-        if (adaUtxos.length === 0) {
-            throw new Error('No ADA-only UTXOs at client address');
-        }
-
-        // ── 1. Fee input ────────────────────────────────────────────────
-
-        tx.addInput({
-            txId: adaUtxos[0].txId,
-            index: adaUtxos[0].index,
-            amount: adaUtxos[0].amount,
-            tokens: [],
-            address: this.clientAddress,
-        });
-
-        // ── 2. Mint request beacon ──────────────────────────────────────
-
-        const mintRequestRedeemer: types.PlutusDataConstructor = {
-            constructor: 0,
-            fields: [],
-        };
-
-        tx.addMint({
+        const mint: MintEntry = {
             policyId: this.beaconPolicyId,
-            assets: [
-                { assetName: REQUEST_BEACON_NAME, amount: new BigNumber(1) },
-            ],
-            plutusScript: this.beaconScript,
-            redeemer: { plutusData: mintRequestRedeemer, exUnits: MINT_EX_UNITS },
-        });
+            scriptCbor: this.beaconScriptCbor,
+            redeemerCbor: mintRedeemer,
+            assets: {
+                [REQUEST_BEACON_NAME]: 1n,
+            },
+        };
 
-        // ── 3. Output to validator with RequestDatum + beacon ───────────
-
-        const requestDatum: types.PlutusDataConstructor = {
-            constructor: 0,
-            fields: [
+        // RequestDatum { nft_policy_id, client_pkh, encrypted_payload } — constructor 0
+        const datumCbor = Data.to(
+            new Constr(0, [
                 Buffer.from(nftPolicyId, 'hex'),
-                this.clientPkh,
+                Buffer.from(this.signer.pkh, 'hex'),
                 Buffer.from(encryptedPayload),
-            ],
-        };
+            ]),
+        );
 
-        const validatorOutput: types.Output = {
-            amount: new BigNumber(2_000_000),
+        const output: TxOutput = {
             address: this.validatorAddress,
-            tokens: [{
-                policyId: this.beaconPolicyId,
-                assetName: REQUEST_BEACON_NAME,
-                amount: new BigNumber(1),
-            }],
-            plutusData: requestDatum,
+            assets: {
+                lovelace: 2_000_000n,
+                [this.beaconPolicyId + REQUEST_BEACON_NAME]: 1n,
+            },
+            datumCbor,
         };
 
-        const minUtxo = tx.calculateMinUtxoAmountBabbage(validatorOutput);
-        if (minUtxo.gt(validatorOutput.amount)) {
-            validatorOutput.amount = minUtxo;
-        }
-
-        tx.addOutput(validatorOutput);
-
-        // ── 4. Required signer (beacon validator checks client_pkh signed) ──
-
-        tx.addRequiredSigner({
-            hash: this.clientPkh,
-            type: types.HashType.ADDRESS,
+        const txHash = await buildAndSubmitScriptTx({
+            provider: this.provider,
+            walletAddress: this.signer.addr,
+            signingKey: this.signer.signingKeyBytes,
+            mints: [mint],
+            outputs: [output],
+            requiredSigners: [this.signer.pkh],
+            network: this.network as any,
         });
 
-        // ── 5. Collateral ───────────────────────────────────────────────
-
-        tx.addCollateral({
-            txId: adaUtxos[0].txId,
-            index: adaUtxos[0].index,
-            amount: adaUtxos[0].amount,
-            address: this.clientAddress,
-        });
-
-        // ── 6. Fee and change ───────────────────────────────────────────
-
-        const preChangeOutput = tx.getOutputAmount().ada;
-        const changeOutput: types.Output = {
-            amount: new BigNumber(2_000_000),
-            address: this.clientAddress,
-            tokens: [],
-        };
-        tx.addOutput(changeOutput);
-
-        const fee = tx.calculateFee().times(1.1).integerValue(BigNumber.ROUND_CEIL);
-        tx.setFee(fee);
-
-        const changeAda = tx.getInputAmount().ada.minus(preChangeOutput).minus(fee);
-        if (changeAda.lt(1_000_000)) {
-            throw new Error(`Insufficient ADA for request tx (change would be ${changeAda})`);
-        }
-        changeOutput.amount = changeAda;
-
-        // ── 7. Sign and submit ──────────────────────────────────────────
-
-        const txHashBuf = tx.getTransactionHash();
-        tx.addWitness(this.signer.sign(txHashBuf));
-
-        const result = tx.buildTransaction();
-        console.error(`[tx] Request tx: ${result.hash}, ${result.payload.length / 2} bytes`);
-
-        return this.submitTx(result.payload);
+        console.error(`[tx] Request tx: ${txHash}`);
+        return txHash;
     }
 
     /**
@@ -311,221 +197,48 @@ export class ClientTxBuilder {
      */
     async cleanupResponse(
         responseUtxoRef: { txHash: string; outputIndex: number },
-        responseDatumClientPkh: string,
-        responseDatumEncryptedPayload: string,
+        responseLovelace: bigint,
     ): Promise<string> {
-        if (!this.protocolParams) {
-            this.protocolParams = await this.fetchProtocolParams();
-        }
-
-        const tx = new Transaction({ protocolParams: this.protocolParams });
-        const tipSlot = await this.fetchTipSlot();
-        tx.setTTL(tipSlot + 600);
-
-        // Fetch client UTXOs for fees/collateral
-        const utxos = await this.fetchUtxos(this.clientAddress.getBech32());
-        const collateralUtxo = utxos.find(u => u.tokens.length === 0 && u.amount.gte(5_000_000));
-        if (!collateralUtxo) {
-            throw new Error('No ADA-only UTXO for collateral');
-        }
-
-        // Fee input
-        const feeUtxo = utxos.find(u =>
-            u.tokens.length === 0 &&
-            !(u.txId === collateralUtxo.txId && u.index === collateralUtxo.index),
-        );
-        if (feeUtxo) {
-            tx.addInput({
-                txId: feeUtxo.txId,
-                index: feeUtxo.index,
-                amount: feeUtxo.amount,
-                tokens: [],
-                address: this.clientAddress,
-            });
-        }
-
-        // ── 1. Consume response UTXO ────────────────────────────────────
-
-        // ResponseDatum { client_pkh, encrypted_response } — constructor 1
-        const responseDatum: types.PlutusDataConstructor = {
-            constructor: 1,
-            fields: [
-                Buffer.from(responseDatumClientPkh, 'hex'),
-                Buffer.from(responseDatumEncryptedPayload, 'hex'),
-            ],
-        };
-
         // ConsumeResponse — BrokerAction constructor 1
-        const consumeResponseRedeemer: types.PlutusDataConstructor = {
-            constructor: 1,
-            fields: [],
+        const consumeRedeemer = Data.to(new Constr(1, []));
+
+        const scriptInput: ScriptInput = {
+            utxo: {
+                txHash: responseUtxoRef.txHash,
+                index: responseUtxoRef.outputIndex,
+                lovelace: responseLovelace,
+                tokens: {
+                    [this.beaconPolicyId + RESPONSE_BEACON_NAME]: 1n,
+                },
+            },
+            address: this.validatorAddress,
+            redeemerCbor: consumeRedeemer,
         };
-
-        const scriptCredential: types.ScriptCredential = {
-            hash: this.brokerScriptHash,
-            type: types.HashType.SCRIPT,
-            plutusScript: this.brokerScript,
-        };
-
-        // Fetch the response UTXO info from Koios
-        const validatorUtxos = await this.fetchUtxos(this.validatorAddress.getBech32());
-        const responseUtxo = validatorUtxos.find(u =>
-            u.txId === responseUtxoRef.txHash && u.index === responseUtxoRef.outputIndex,
-        );
-        if (!responseUtxo) {
-            throw new Error(`Response UTXO not found: ${responseUtxoRef.txHash}#${responseUtxoRef.outputIndex}`);
-        }
-
-        tx.addInput({
-            txId: responseUtxo.txId,
-            index: responseUtxo.index,
-            amount: responseUtxo.amount,
-            tokens: responseUtxo.tokens,
-            address: new address.EnterpriseAddress(
-                this.clientAddress.getNetworkId() as types.NetworkId,
-                scriptCredential,
-            ),
-            plutusData: responseDatum,
-            redeemer: { plutusData: consumeResponseRedeemer, exUnits: SPEND_EX_UNITS },
-        });
-
-        // ── 2. Burn response beacon ─────────────────────────────────────
 
         // BurnResponseBeacon — BeaconAction constructor 3
-        const burnResponseRedeemer: types.PlutusDataConstructor = {
-            constructor: 3,
-            fields: [],
-        };
+        const burnRedeemer = Data.to(new Constr(3, []));
 
-        tx.addMint({
+        const mint: MintEntry = {
             policyId: this.beaconPolicyId,
-            assets: [
-                { assetName: RESPONSE_BEACON_NAME, amount: new BigNumber(-1) },
-            ],
-            plutusScript: this.beaconScript,
-            redeemer: { plutusData: burnResponseRedeemer, exUnits: MINT_EX_UNITS },
-        });
-
-        // ── 3. Required signer (client_pkh for ConsumeResponse) ─────────
-
-        tx.addRequiredSigner({
-            hash: this.clientPkh,
-            type: types.HashType.ADDRESS,
-        });
-
-        // ── 4. Collateral ───────────────────────────────────────────────
-
-        tx.addCollateral({
-            txId: collateralUtxo.txId,
-            index: collateralUtxo.index,
-            amount: collateralUtxo.amount,
-            address: this.clientAddress,
-        });
-
-        // ── 5. Fee and change ───────────────────────────────────────────
-
-        const fee = tx.calculateFee();
-        tx.setFee(fee);
-
-        const inputAmount = tx.getInputAmount();
-        const outputAmount = tx.getOutputAmount();
-        const changeAda = inputAmount.ada.minus(outputAmount.ada).minus(fee);
-
-        if (changeAda.gte(1_000_000)) {
-            tx.addOutput({
-                amount: changeAda,
-                address: this.clientAddress,
-                tokens: [],
-            });
-        }
-
-        // ── 6. Sign and submit ──────────────────────────────────────────
-
-        const txHashBuf = tx.getTransactionHash();
-        tx.addWitness(this.signer.sign(txHashBuf));
-
-        const result = tx.buildTransaction();
-        console.error(`[tx] Cleanup tx: ${result.hash}, ${result.payload.length / 2} bytes`);
-
-        return this.submitTx(result.payload);
-    }
-
-    // ── Koios helpers ──────────────────────────────────────────────────
-
-    private async fetchProtocolParams(): Promise<types.ProtocolParams> {
-        const resp = await fetch(`${this.koiosUrl}/tip`);
-        if (!resp.ok) throw new Error(`Koios tip ${resp.status}`);
-        const tip = (await resp.json() as any[])[0];
-
-        const epochResp = await fetch(`${this.koiosUrl}/epoch_params?_epoch_no=${tip.epoch_no}`);
-        if (!epochResp.ok) throw new Error(`Koios epoch_params ${epochResp.status}`);
-        const params = (await epochResp.json() as any[])[0];
-
-        return {
-            minFeeA: new BigNumber(params.min_fee_a),
-            minFeeB: new BigNumber(params.min_fee_b),
-            stakeKeyDeposit: new BigNumber(params.key_deposit),
-            lovelacePerUtxoWord: new BigNumber(0),
-            utxoCostPerByte: new BigNumber(params.coins_per_utxo_size),
-            collateralPercent: new BigNumber(params.collateral_percent),
-            priceSteps: new BigNumber(params.price_step),
-            priceMem: new BigNumber(params.price_mem),
-            languageView: {
-                PlutusScriptV1: params.cost_models?.PlutusV1 ?? [],
-                PlutusScriptV2: params.cost_models?.PlutusV2 ?? [],
-                PlutusScriptV3: params.cost_models?.PlutusV3 ?? [],
+            scriptCbor: this.beaconScriptCbor,
+            redeemerCbor: burnRedeemer,
+            assets: {
+                [RESPONSE_BEACON_NAME]: -1n,
             },
-            maxTxSize: params.max_tx_size,
-            maxValueSize: params.max_val_size,
-            minFeeRefScriptCostPerByte: new BigNumber(params.min_fee_ref_script_cost_per_byte ?? 15),
         };
-    }
 
-    private async fetchTipSlot(): Promise<number> {
-        const resp = await fetch(`${this.koiosUrl}/tip`);
-        if (!resp.ok) throw new Error(`Koios tip ${resp.status}`);
-        const tip = (await resp.json() as any[])[0];
-        return tip.abs_slot;
-    }
-
-    private async fetchUtxos(addr: string): Promise<Array<{
-        txId: string;
-        index: number;
-        amount: BigNumber;
-        tokens: types.Token[];
-    }>> {
-        const resp = await fetch(`${this.koiosUrl}/address_utxos`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ _addresses: [addr], _extended: true }),
+        const txHash = await buildAndSubmitScriptTx({
+            provider: this.provider,
+            walletAddress: this.signer.addr,
+            signingKey: this.signer.signingKeyBytes,
+            scriptInputs: [scriptInput],
+            spendingScriptCbor: this.brokerScriptCbor,
+            mints: [mint],
+            requiredSigners: [this.signer.pkh],
+            network: this.network as any,
         });
-        if (!resp.ok) throw new Error(`Koios address_utxos ${resp.status}`);
-        const utxos: any[] = await resp.json();
 
-        return utxos.map(u => ({
-            txId: u.tx_hash,
-            index: u.tx_index,
-            amount: new BigNumber(u.value),
-            tokens: (u.asset_list ?? []).map((a: any) => ({
-                policyId: a.policy_id,
-                assetName: Buffer.from(a.asset_name ?? '', 'utf-8').toString('hex'),
-                amount: new BigNumber(a.quantity),
-            })),
-        }));
-    }
-
-    private async submitTx(cborHex: string): Promise<string> {
-        const txBytes = Buffer.from(cborHex, 'hex');
-        const resp = await fetch(`${this.koiosUrl}/submittx`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/cbor' },
-            body: txBytes,
-        });
-        if (!resp.ok) {
-            const text = await resp.text();
-            throw new Error(`Koios submittx ${resp.status}: ${text}`);
-        }
-        const hash = await resp.text();
-        return hash.replace(/"/g, '').trim();
+        console.error(`[tx] Cleanup tx: ${txHash}`);
+        return txHash;
     }
 }

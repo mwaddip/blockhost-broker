@@ -34,7 +34,7 @@ import {
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { types } from '@stricahq/typhonjs';
+import { buildEnterpriseAddress } from 'cmttk/address';
 
 // ── Logging (all to stderr) ─────────────────────────────────────────
 
@@ -389,27 +389,23 @@ async function cmdRequest(args: Args): Promise<void> {
     log(`Encrypted payload: ${encrypted.length} bytes`);
 
     // 5. Load signing key and derive address
-    const networkId = args.koiosUrl.includes('preprod') ? types.NetworkId.TESTNET : types.NetworkId.MAINNET;
-    const signer = await loadSigner(args.signingKey, networkId);
+    const network = args.koiosUrl.includes('mainnet') ? 'mainnet' : 'preprod';
+    const signer = loadSigner(args.signingKey, network);
     const clientPkh = signer.pkh;
 
-    log(`Client address: ${signer.addr.getBech32()}`);
-    log(`Client PKH: ${clientPkh.toString('hex')}`);
+    log(`Client address: ${signer.addr}`);
+    log(`Client PKH: ${clientPkh}`);
 
     // 6. Build and submit request transaction
     const scripts = JSON.parse(readFileSync(args.scriptsPath, 'utf-8'));
-    const txBuilder = new ClientTxBuilder(scripts, signer, networkId, args.koiosUrl);
+    const txBuilder = new ClientTxBuilder(scripts, signer, network, args.koiosUrl);
 
     log('Submitting request transaction...');
     const requestTxHash = await txBuilder.submitRequest(args.nftPolicyId, encrypted);
     log(`Request tx submitted: ${requestTxHash}`);
 
     // Derive validator address from registry
-    const { address: addrLib } = await import('@stricahq/typhonjs');
-    const validatorAddress = new addrLib.EnterpriseAddress(networkId, {
-        hash: Buffer.from(registry.validatorHash, 'hex'),
-        type: types.HashType.SCRIPT,
-    }).getBech32();
+    const validatorAddress = buildEnterpriseAddress(registry.validatorHash, network as any, true);
 
     // 7. Save recovery state
     saveRecoveryState({
