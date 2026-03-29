@@ -77,6 +77,21 @@ if [ -f "$CARDANO_SCRIPTS" ]; then
     cp "$CARDANO_SCRIPTS" "build/${PKG_NAME}/opt/blockhost/adapters/cardano/contracts/"
 fi
 
+# Ergo client (esbuild bundle — single file, no node_modules needed)
+ERGO_CLIENT="${REPO_ROOT}/adapters/ergo/client"
+if [ -d "$ERGO_CLIENT/src" ]; then
+    echo "Building Ergo client plugin..."
+    DEST="build/${PKG_NAME}/opt/blockhost/adapters/ergo/client"
+    mkdir -p "$DEST/dist"
+
+    if [ ! -d "$ERGO_CLIENT/node_modules" ]; then
+        (cd "$ERGO_CLIENT" && npm ci --ignore-scripts)
+    fi
+
+    (cd "$ERGO_CLIENT" && npm run build)
+    cp "$ERGO_CLIENT/dist/main.js" "$DEST/dist/"
+fi
+
 # ── Wizard integration hook ──────────────────────────────────────────
 
 # Manifest: discovered by the installer wizard at startup
@@ -104,6 +119,7 @@ Description: Blockhost broker client for Proxmox servers
   - EVM (builtin, Python)
   - OPNet (Bitcoin L1, TypeScript subprocess)
   - Cardano (TypeScript subprocess)
+  - Ergo (TypeScript subprocess)
  .
  This package is installed on Proxmox servers that need IPv6
  connectivity through the Blockhost network.

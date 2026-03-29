@@ -27,6 +27,12 @@ OPNet environment variables in `~/projects/sharedenv/opnet-regtest.env` (not com
 - `OPNET_OPERATOR_MNEMONIC` - Operator mnemonic
 - `BROKER_ECIES_PRIVATE_KEY` - ECIES private key (hex)
 
+Ergo environment variables in `~/projects/sharedenv/ergo-testnet.env` (not committed):
+- `DEPLOYER_MNEMONIC` - Deployer BIP39 mnemonic (registry owner)
+- `DEPLOYER_ADDRESS` - Deployer P2PK address
+- `ERGO_NODE_URL` - Local Ergo node (`http://127.0.0.1:9052`)
+- `ERGO_EXPLORER_URL` - Explorer API URL
+
 ## Deployed Contracts (Sepolia Testnet)
 
 **Currently Active (V3):**
@@ -48,6 +54,9 @@ Test registry config fetched from: https://raw.githubusercontent.com/mwaddip/blo
 - **Broker Manager**: https://95.179.128.177:8443 (web UI for lease management)
 - **Operator Wallet**: `0x6A5973DDe7E57686122Eb12DA85389c53fe2EE4b` (key: `/etc/blockhost-broker/operator.key` — contract owner, used for on-chain txs)
 - **Deployer Wallet**: `0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9` (key: `/etc/blockhost-broker/deployer.key` — NOT the contract owner)
+- **Ergo Relay**: `127.0.0.1:9064` (signing + P2P broadcast for Ergo txs)
+- **Ergo Operator Wallet**: `3Wvkg6K6nsLMz3KB7LXteGJ9zcVbHWSsGbrfFV4PBjKCVwh7JGAV` (key: `/etc/blockhost-broker/ergo-operator.key`)
+- **Ergo ECIES Key**: `/etc/blockhost-broker/ergo-ecies.key`
 
 ## Development
 
@@ -69,6 +78,11 @@ forge script script/DeployV2.s.sol --rpc-url $RPC_URL --broadcast
 cd adapters/opnet/adapter && npm run build
 scp dist/main.js linuxuser@95.179.128.177:/tmp/adapter-main.js
 ssh linuxuser@95.179.128.177 'sudo cp /tmp/adapter-main.js /opt/blockhost/adapters/opnet/adapter/dist/main.js && sudo systemctl restart blockhost-opnet-adapter@regtest'
+
+# Build and deploy Ergo adapter
+cd adapters/ergo/adapter && npm run build
+scp dist/main.js linuxuser@95.179.128.177:/tmp/ergo-adapter-main.js
+ssh linuxuser@95.179.128.177 'sudo cp /tmp/ergo-adapter-main.js /opt/blockhost/adapters/ergo/adapter/dist/main.js && sudo systemctl restart blockhost-ergo-adapter@testnet'
 
 # Run client (on Proxmox server)
 broker-client request --nft-contract 0x... --wallet-key /path/to/key
@@ -104,6 +118,10 @@ Components that must stay in sync:
 - `registry.json` - Must point to the active EVM BrokerRegistry address
 - `registry-testnet.json` - Must point to the test EVM BrokerRegistry address
 - `registry-opnet-regtest.json` - Must point to the OPNet regtest BrokerRegistry address
+- `adapters/ergo/contracts/contracts.ts` - Guard ErgoTree template (compiled from guard.es)
+- `adapters/ergo/adapter/src/` - Adapter must match guard script register layout
+- `adapters/ergo/client/src/` - Client must match guard script register layout + response format
+- `registry-ergo-testnet.json` - Must point to the Ergo testnet registry NFT ID
 - `scripts/broker-chains.json` - Chain dispatch config shipped by client .deb
 
 Common breaking changes to watch for:
@@ -117,6 +135,15 @@ Common breaking changes to watch for:
 ```
 blockhost-broker/
 ├── adapters/
+│   ├── ergo/
+│   │   ├── adapter/              # Ergo adapter (polls Explorer → POST /v1/allocations → response box)
+│   │   ├── client/               # Ergo client (request box → watch response → JSON stdout)
+│   │   ├── contracts/            # Guard script ErgoTree template + byte surgery
+│   │   └── deploy-registry.ts    # Registry NFT minting script
+│   ├── cardano/
+│   │   ├── adapter/              # Cardano adapter (polls Koios/Blockfrost → POST /v1/allocations → response datum)
+│   │   ├── client/               # Cardano client (request datum → watch response → JSON stdout)
+│   │   └── contracts/            # Aiken validators + parameterized scripts
 │   └── opnet/
 │       ├── adapter/              # OPNet adapter (polls contract → POST /v1/allocations → OP_RETURN)
 │       ├── client/               # OPNet client (submit request → watch OP_RETURN → JSON stdout)
@@ -127,13 +154,14 @@ blockhost-broker/
 ├── scripts/
 │   ├── broker-client.py          # Client for Proxmox servers (chain dispatch)
 │   ├── build-deb.sh              # Client .deb builder
-│   ├── broker-chains.json        # Chain config shipped by .deb (EVM + OPNet)
+│   ├── broker-chains.json        # Chain config shipped by .deb (EVM + OPNet + Cardano + Ergo)
 │   └── broker-chains.json.example
 ├── facts/                        # Interface contracts submodule (READ-ONLY)
 ├── BROKER_INTERFACE.md           # Authoritative broker interface specification
 ├── registry.json                 # EVM production registry config
 ├── registry-testnet.json         # EVM test registry config
-└── registry-opnet-regtest.json   # OPNet regtest registry config
+├── registry-opnet-regtest.json   # OPNet regtest registry config
+└── registry-ergo-testnet.json    # Ergo testnet registry config
 ```
 
 ## Interface Contract (REFERENCE — READ-ONLY)
@@ -160,6 +188,7 @@ See BROKER_INTERFACE.md for detailed API schemas, database schema, config refere
 
 - EVM path is built into the Rust daemon (`blockhost-broker-rs/src/eth/`)
 - Additional chains use external adapter processes that POST to `http://127.0.0.1:8080/v1/allocations`
-- Each adapter is a long-running process with chain-specific tooling (Node.js for OPNet)
+- Each adapter is a long-running process with chain-specific tooling (Node.js for OPNet, Cardano, Ergo)
+- Ergo adapter uses Fleet SDK for tx building, ergo-relay for signing/broadcast, Explorer API for queries
 - Adapter owns: contract polling, encryption/decryption, response delivery
 - Broker core owns: IPAM, WireGuard, DNS, SQLite, allocation lifecycle

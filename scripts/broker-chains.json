@@ -29,5 +29,17 @@
     "koios_url": "https://preprod.koios.rest/api/v1",
     "registry_address": "addr_test1wz6scyhnjeythyt6gchn5r26qeyqe0p4v7dmvstl3gd5dlc3wwyvx",
     "beacon_policy_id": "ea2494cc14ea56088a8434be9ecf55913a94ed0e382efa52ab71df7d"
+  },
+  {
+    "name": "ergo",
+    "match": "^[1-9A-HJ-NP-Za-km-z]{40,60}$",
+    "adapter": "node",
+    "adapter_args": [
+      "/opt/blockhost/adapters/ergo/client/dist/main.js",
+      "request"
+    ],
+    "timeout": 600,
+    "explorer_url": "https://api-testnet.ergoplatform.com",
+    "registry_nft_id": "d130831fe20df2266e160afc1b5241c2e10674f3ae3ea070321ab40a6a09cc7a"
   }
 ]

@@ -63,6 +63,45 @@
     </section>
     {% endif %}
 
+    {% if cardano_wallet_info %}
+    <section class="wallet-info-section {% if cardano_wallet_info.low_balance %}low-balance{% endif %}">
+        <div class="wallet-info">
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Cardano Operator Wallet</span>
+                <code class="wallet-info-value copyable" title="Click to copy" data-copy="{{ cardano_wallet_info.address }}">{{ cardano_wallet_info.address[:20] }}...{{ cardano_wallet_info.address[-8:] }}</code>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">ADA Balance</span>
+                <span class="wallet-info-value balance {% if cardano_wallet_info.low_balance %}warning{% endif %}">
+                    {{ "%.2f"|format(cardano_wallet_info.balance_ada) }} ADA
+                    {% if cardano_wallet_info.low_balance %}<span class="warning-icon" title="Low balance - may not be able to process transactions">&#9888;</span>{% endif %}
+                </span>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Network</span>
+                <span class="wallet-info-value">{{ cardano_wallet_info.network }}</span>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if ergo_wallet_info %}
+    <section class="wallet-info-section">
+        <div class="wallet-info">
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">Ergo Operator Wallet</span>
+                <code class="wallet-info-value copyable" title="Click to copy" data-copy="{{ ergo_wallet_info.address }}">{{ ergo_wallet_info.address[:20] }}...{{ ergo_wallet_info.address[-8:] }}</code>
+            </div>
+            <div class="wallet-info-item">
+                <span class="wallet-info-label">ERG Balance</span>
+                <span class="wallet-info-value balance">
+                    {{ "%.4f"|format(ergo_wallet_info.balance_erg) }} ERG
+                </span>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
     <section class="section">
         <div class="section-header">
             <h2>EVM Leases <span class="badge badge-evm">{{ evm_leases|length }}</span></h2>

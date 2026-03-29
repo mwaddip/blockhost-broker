@@ -60,6 +60,26 @@ class BtcWalletInfo:
     low_balance: bool
 
 
+@dataclass
+class CardanoWalletInfo:
+    """Cardano operator wallet information."""
+
+    address: str
+    balance_lovelace: int
+    balance_ada: float
+    network: str
+    low_balance: bool
+
+
+@dataclass
+class ErgoWalletInfo:
+    """Ergo operator wallet information."""
+
+    address: str
+    balance_erg: float
+    explorer_url: str
+
+
 # Chain ID to network name mapping
 CHAIN_NAMES = {
     1: "Ethereum Mainnet",
@@ -73,6 +93,7 @@ CHAIN_NAMES = {
 
 LOW_BALANCE_THRESHOLD_WEI = 50000000000000000  # 0.05 ETH
 LOW_BTC_BALANCE_SAT = 10000  # 0.0001 BTC
+LOW_ADA_BALANCE_LOVELACE = 10_000_000  # 10 ADA
 
 
 class BrokerManager:
@@ -88,6 +109,11 @@ class BrokerManager:
         opnet_rpc_url: Optional[str] = None,
         opnet_operator_address: Optional[str] = None,
         opnet_network: str = "OPNet Testnet",
+        cardano_operator_address: Optional[str] = None,
+        cardano_blockfrost_key: Optional[str] = None,
+        cardano_network: str = "Cardano Preprod",
+        ergo_operator_address: Optional[str] = None,
+        ergo_explorer_url: str = "https://api-testnet.ergoplatform.com",
     ):
         self.db_path = db_path
         self.operator_key_path = operator_key_path
@@ -97,6 +123,11 @@ class BrokerManager:
         self.opnet_rpc_url = opnet_rpc_url
         self.opnet_operator_address = opnet_operator_address
         self.opnet_network = opnet_network
+        self.cardano_operator_address = cardano_operator_address
+        self.cardano_blockfrost_key = cardano_blockfrost_key
+        self.cardano_network = cardano_network
+        self.ergo_operator_address = ergo_operator_address
+        self.ergo_explorer_url = ergo_explorer_url
 
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
 
@@ -154,6 +185,68 @@ class BrokerManager:
         except Exception as e:
             logger.warning("Failed to fetch OPNet balance: %s", e)
             return None
+
+    def get_cardano_wallet_info(self) -> Optional[CardanoWalletInfo]:
+        """Get Cardano operator wallet address and ADA balance."""
+        if not self.cardano_operator_address or not self.cardano_blockfrost_key:
+            return None
+
+        try:
+            key = self.cardano_blockfrost_key
+            if "preview" in key:
+                base = "https://cardano-preview.blockfrost.io/api/v0"
+            elif "preprod" in key:
+                base = "https://cardano-preprod.blockfrost.io/api/v0"
+            else:
+                base = "https://cardano-mainnet.blockfrost.io/api/v0"
+
+            url = f"{base}/addresses/{self.cardano_operator_address}"
+            req = urllib.request.Request(url, headers={"project_id": key})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+            amounts = data.get("amount", [])
+            lovelace = 0
+            for a in amounts:
+                if a["unit"] == "lovelace":
+                    lovelace = int(a["quantity"])
+                    break
+
+            return CardanoWalletInfo(
+                address=self.cardano_operator_address,
+                balance_lovelace=lovelace,
+                balance_ada=lovelace / 10**6,
+                network=self.cardano_network,
+                low_balance=lovelace < LOW_ADA_BALANCE_LOVELACE,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch Cardano balance: %s", e)
+            return None
+
+    def get_ergo_wallet_info(self) -> Optional[ErgoWalletInfo]:
+        """Get Ergo operator wallet address and ERG balance."""
+        if not self.ergo_operator_address:
+            return None
+
+        try:
+            url = f"{self.ergo_explorer_url}/api/v1/addresses/{self.ergo_operator_address}/balance/total"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+            nano_erg = int(data.get("confirmed", {}).get("nanoErgs", 0))
+            return ErgoWalletInfo(
+                address=self.ergo_operator_address,
+                balance_erg=nano_erg / 10**9,
+                explorer_url=self.ergo_explorer_url,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch Ergo balance: %s", e)
+            return ErgoWalletInfo(
+                address=self.ergo_operator_address,
+                balance_erg=0.0,
+                explorer_url=self.ergo_explorer_url,
+            )
 
     def get_leases(self) -> list[Lease]:
         """Get all current leases from the broker database."""

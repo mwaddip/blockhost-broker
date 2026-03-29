@@ -48,6 +48,20 @@
           "has_auto_fetch": true
         }
       ]
+    },
+    "ergo": {
+      "wallet_pattern": "^[1-9A-HJ-NP-Za-km-z]{40,60}$",
+      "contract_validation": "^[0-9a-fA-F]{64}$",
+      "fields": [
+        {
+          "name": "broker_registry",
+          "type": "text",
+          "label": "Registry NFT ID",
+          "placeholder": "64 hex chars...",
+          "hint": "The Ergo token ID of the broker registry NFT.",
+          "has_auto_fetch": true
+        }
+      ]
     }
   }
 }

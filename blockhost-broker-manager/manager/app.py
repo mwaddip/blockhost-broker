@@ -79,6 +79,8 @@ def get_broker_manager() -> BrokerManager:
 
         onchain = broker_config.get("onchain", {})
         opnet = broker_config.get("opnet", {})
+        cardano = broker_config.get("cardano", {})
+        ergo = broker_config.get("ergo", {})
 
         _broker_manager = BrokerManager(
             db_path=BROKER_DATA_DIR / "ipam.db",
@@ -91,6 +93,11 @@ def get_broker_manager() -> BrokerManager:
             opnet_rpc_url=opnet.get("rpc_url"),
             opnet_operator_address=opnet.get("operator_address"),
             opnet_network=opnet.get("network_name", "OPNet Testnet"),
+            cardano_operator_address=cardano.get("operator_address"),
+            cardano_blockfrost_key=cardano.get("blockfrost_api_key"),
+            cardano_network=cardano.get("network_name", "Cardano Preprod"),
+            ergo_operator_address=ergo.get("operator_address"),
+            ergo_explorer_url=ergo.get("explorer_url", "https://api-testnet.ergoplatform.com"),
         )
     return _broker_manager
 
@@ -155,6 +162,8 @@ def dashboard():
     leases = broker.get_leases()
     wallet_info = broker.get_wallet_info()
     btc_wallet_info = broker.get_btc_wallet_info()
+    cardano_wallet_info = broker.get_cardano_wallet_info()
+    ergo_wallet_info = broker.get_ergo_wallet_info()
     active_leases = [l for l in leases if not l.is_test]
     test_leases = [l for l in leases if l.is_test]
     evm_leases = [l for l in active_leases if l.source == "evm"]
@@ -167,6 +176,8 @@ def dashboard():
         wallet_address=request.wallet_address,
         wallet_info=wallet_info,
         btc_wallet_info=btc_wallet_info,
+        cardano_wallet_info=cardano_wallet_info,
+        ergo_wallet_info=ergo_wallet_info,
     )
 
 

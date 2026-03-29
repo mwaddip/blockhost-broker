@@ -700,6 +700,21 @@ WantedBy=multi-user.target
   └── blockhost-opnet-adapter@.service
 ```
 
+### Ergo Adapter
+
+```
+/opt/blockhost/adapters/ergo/adapter/
+  └── dist/main.js             # Bundled adapter (esbuild, single file)
+/etc/blockhost-broker/
+  ├── ergo-adapter-{network}.env  # Per-network environment variables
+  ├── ergo-operator.key           # Operator private key (hex)
+  └── ergo-ecies.key              # ECIES private key (hex)
+/var/lib/blockhost-broker/
+  └── adapter-ergo-{network}.state  # Persistent polling state (processed beacon IDs)
+/lib/systemd/system/
+  └── blockhost-ergo-adapter@.service
+```
+
 ### Broker Client (on Blockhost hosts)
 
 ```
@@ -720,6 +735,8 @@ WantedBy=multi-user.target
 |----------|----------------|-------|
 | **EVM on-chain monitor** | IPAM + WireGuard (internal) | Built into broker daemon, polls Ethereum contracts |
 | **OPNet adapter** | REST API (`POST /v1/allocations`) | External process, delivers responses via OP_RETURN |
+| **Cardano adapter** | REST API (`POST /v1/allocations`) | External process, delivers responses via inline datum |
+| **Ergo adapter** | REST API (`POST /v1/allocations`) | External process, delivers responses via box registers, signs via ergo-relay |
 | **Broker manager** | REST API (all endpoints) | Web UI for operators, Flask app on port 8443 |
 | **Broker client** | On-chain contracts + WireGuard tunnel + `GET /v1/config` | Python client on Blockhost hosts |
 | **blockhost-common** | `broker-allocation.json` | `load_broker_allocation()` reads the four required fields |
