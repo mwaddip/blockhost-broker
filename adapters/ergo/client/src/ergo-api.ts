@@ -173,7 +173,7 @@ export async function submitTx(relayUrl: string, signedTx: unknown, explorerUrl?
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: txJson,
-            signal: AbortSignal.timeout(30_000),
+            signal: AbortSignal.timeout(60_000),
         });
         if (resp.ok) {
             const data = await resp.json() as { id: string } | string;
