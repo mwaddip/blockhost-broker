@@ -140,19 +140,51 @@ export async function signTx(
     return resp.json();
 }
 
-/** Broadcast a signed transaction via ergo-relay. */
-export async function submitTx(relayUrl: string, signedTx: unknown): Promise<string> {
-    const resp = await fetch(`${relayUrl}/transactions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(signedTx, (_k, v) => typeof v === 'bigint' ? v.toString() : v),
-    });
-    if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(`ergo-relay broadcast failed (${resp.status}): ${text}`);
+/**
+ * Broadcast a signed transaction.
+ * Tries ergo-relay first, falls back to Explorer mempool API.
+ */
+export async function submitTx(relayUrl: string, signedTx: unknown, explorerUrl?: string): Promise<string> {
+    const txJson = JSON.stringify(signedTx, (_k, v) => typeof v === 'bigint' ? v.toString() : v);
+
+    // Try ergo-relay P2P broadcast first
+    try {
+        const resp = await fetch(`${relayUrl}/transactions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: txJson,
+            signal: AbortSignal.timeout(30_000),
+        });
+        if (resp.ok) {
+            const data = await resp.json() as { id: string } | string;
+            return typeof data === 'string' ? data : data.id;
+        }
+        if (resp.status === 400) {
+            const text = await resp.text().catch(() => '');
+            throw new Error(`Transaction rejected: ${text}`);
+        }
+    } catch (err) {
+        if (err instanceof Error && err.message.startsWith('Transaction rejected')) throw err;
     }
-    const data = await resp.json() as { id: string } | string;
-    return typeof data === 'string' ? data : data.id;
+
+    // Fallback: Explorer mempool submission
+    if (explorerUrl) {
+        const resp = await fetch(`${explorerUrl}/api/v1/mempool/transactions/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: txJson,
+            signal: AbortSignal.timeout(30_000),
+        });
+        if (resp.ok) {
+            const data = await resp.json() as { id: string } | string;
+            console.error('[submit] Broadcast via Explorer fallback');
+            return typeof data === 'string' ? data : data.id;
+        }
+        const text = await resp.text().catch(() => '');
+        throw new Error(`Broadcast failed (relay + explorer): ${text}`);
+    }
+
+    throw new Error('Broadcast failed: ergo-relay unavailable and no explorer fallback configured');
 }
 
 // ── Register decoding helpers ───────────────────────────────────────

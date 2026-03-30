@@ -85,7 +85,7 @@ export class ClientTxBuilder {
             height,
         );
 
-        const txId = await submitTx(this.relayUrl, signedTx);
+        const txId = await submitTx(this.relayUrl, signedTx, this.explorerUrl);
         console.error(`[tx] Request tx: ${txId}, beacon: ${beaconTokenId}`);
         return { txId, beaconTokenId };
     }
@@ -119,7 +119,7 @@ export class ClientTxBuilder {
             height,
         );
 
-        const txId = await submitTx(this.relayUrl, signedTx);
+        const txId = await submitTx(this.relayUrl, signedTx, this.explorerUrl);
         console.error(`[tx] Cleanup tx: ${txId}`);
         return txId;
     }

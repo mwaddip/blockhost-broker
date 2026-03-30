@@ -80,8 +80,8 @@ export class ResponseTxBuilder {
             height,
         );
 
-        // Broadcast via ergo-relay
-        const txId = await submitTx(this.relayUrl, signedTx);
+        // Broadcast via ergo-relay, fall back to Explorer
+        const txId = await submitTx(this.relayUrl, signedTx, this.explorerUrl);
         console.log(`[tx-builder] Response tx submitted: ${txId}`);
         return txId;
     }
