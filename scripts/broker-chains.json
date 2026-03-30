@@ -32,7 +32,7 @@
   },
   {
     "name": "ergo",
-    "match": "^[1-9A-HJ-NP-Za-km-z]{40,60}$",
+    "match": "^[1-9A-HJ-NP-Za-km-z]{40,200}$",
     "adapter": "node",
     "adapter_args": [
       "/opt/blockhost/adapters/ergo/client/dist/main.js",

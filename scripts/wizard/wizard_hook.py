@@ -15,7 +15,7 @@ _REPO_RAW = "https://raw.githubusercontent.com/mwaddip/blockhost-broker/main"
 _EVM_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _OPNET_PATTERN = re.compile(r"^(bc1p|opt1p)[a-z0-9]{58}$")
 _CARDANO_PATTERN = re.compile(r"^addr(_test)?1[a-z0-9]{50,120}$")
-_ERGO_PATTERN = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{40,60}$")
+_ERGO_PATTERN = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{40,200}$")
 
 
 def fetch_registry(wallet_address: str, testing: bool = False) -> Optional[str]:
