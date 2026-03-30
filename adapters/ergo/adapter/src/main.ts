@@ -51,11 +51,11 @@ interface AllocationResponse {
     broker_endpoint: string;
 }
 
-async function requestAllocation(wgPubkey: string): Promise<AllocationResponse> {
+async function requestAllocation(wgPubkey: string, nftContract: string): Promise<AllocationResponse> {
     const url = `${config.brokerApiUrl}/v1/allocations`;
     const body = JSON.stringify({
         wg_pubkey: wgPubkey,
-        nft_contract: config.guardAddress,
+        nft_contract: nftContract,
         source: config.source,
         ...(config.leaseDuration > 0 && { lease_duration: config.leaseDuration }),
     });
@@ -96,7 +96,7 @@ async function handleNewRequests(requests: RequestBox[]): Promise<void> {
         // Request allocation from broker
         let allocation: AllocationResponse;
         try {
-            allocation = await requestAllocation(payload.wgPubkey);
+            allocation = await requestAllocation(payload.wgPubkey, req.nftContract);
         } catch (err) {
             console.error(`[adapter] Allocation failed:`, err);
             continue;

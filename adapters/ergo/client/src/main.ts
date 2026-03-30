@@ -50,6 +50,7 @@ interface Args {
     relayUrl: string;
     signingKey: string;
     registryNftId: string;
+    nftContract: string;
     timeoutMs: number;
     network: 'testnet' | 'mainnet';
 }
@@ -65,6 +66,7 @@ function parseArgs(): Args {
             `  --relay-url URL       ergo-relay URL (default: http://127.0.0.1:9064)\n` +
             `  --signing-key PATH    Hex private key file\n` +
             `  --registry-nft-id ID  Registry NFT token ID (64 hex chars)\n` +
+            `  --nft-contract ADDR   Subscription P2S address (nft_contract identifier)\n` +
             `  --timeout N           Response timeout in seconds (default: 600)\n` +
             `  --network NAME        testnet or mainnet (default: testnet)\n`,
         );
@@ -84,8 +86,9 @@ function parseArgs(): Args {
         command,
         explorerUrl: getFlag(['--explorer-url', '--rpc-url'], 'https://api-testnet.ergoplatform.com'),
         relayUrl: getFlag(['--relay-url'], 'http://127.0.0.1:9064'),
-        signingKey: getFlag(['--signing-key']),
-        registryNftId: getFlag(['--registry-nft-id']),
+        signingKey: getFlag(['--signing-key', '--mnemonic']),
+        registryNftId: getFlag(['--registry-nft-id', '--registry-pubkey']),
+        nftContract: getFlag(['--nft-contract', '--nft-pubkey']),
         timeoutMs: Number(getFlag(['--timeout'], '600')) * 1000,
         network: getFlag(['--network'], 'testnet') as 'testnet' | 'mainnet',
     };
@@ -310,7 +313,7 @@ async function cmdRequest(args: Args): Promise<void> {
     );
 
     log('Submitting request transaction...');
-    const { beaconTokenId } = await txBuilder.submitRequest(encrypted);
+    const { beaconTokenId } = await txBuilder.submitRequest(encrypted, args.nftContract);
 
     // 6. Save recovery state
     saveRecoveryState({

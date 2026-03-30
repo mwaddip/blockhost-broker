@@ -14,6 +14,7 @@ export interface RequestBox {
     beaconTokenId: string;
     clientPubkeyHex: string;
     encryptedPayloadHex: string;
+    nftContract: string;
 }
 
 type RequestHandler = (requests: RequestBox[]) => Promise<void>;
@@ -93,10 +94,11 @@ export class RequestPoller {
             // Must have at least one token (beacon)
             if (box.assets.length === 0) continue;
 
-            // Must have R4 (client pubkey) and R5 (encrypted payload)
+            // Must have R4 (client pubkey), R5 (encrypted payload), R6 (nft contract)
             const r4Hex = box.additionalRegisters['R4'];
             const r5Hex = box.additionalRegisters['R5'];
-            if (!r4Hex || !r5Hex) continue;
+            const r6Hex = box.additionalRegisters['R6'];
+            if (!r4Hex || !r5Hex || !r6Hex) continue;
 
             try {
                 const clientPubkey = decodeCollByte(r4Hex);
@@ -105,11 +107,15 @@ export class RequestPoller {
                 const encryptedPayload = decodeCollByte(r5Hex);
                 if (encryptedPayload.length === 0) continue;
 
+                const nftContractBytes = decodeCollByte(r6Hex);
+                const nftContract = Buffer.from(nftContractBytes).toString('utf-8');
+
                 results.push({
                     box,
                     beaconTokenId: box.assets[0]!.tokenId,
                     clientPubkeyHex: Buffer.from(clientPubkey).toString('hex'),
                     encryptedPayloadHex: Buffer.from(encryptedPayload).toString('hex'),
+                    nftContract,
                 });
             } catch {
                 // Skip boxes with unparseable registers

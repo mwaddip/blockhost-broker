@@ -40,7 +40,7 @@ export class ClientTxBuilder {
      *
      * Returns the tx ID and beacon token ID.
      */
-    async submitRequest(encryptedPayload: Uint8Array): Promise<{
+    async submitRequest(encryptedPayload: Uint8Array, nftContract: string): Promise<{
         txId: string;
         beaconTokenId: string;
     }> {
@@ -60,6 +60,7 @@ export class ClientTxBuilder {
         // Build registers
         const r4 = SColl(SByte, Uint8Array.from(Buffer.from(this.clientPubkeyHex, 'hex'))).toHex();
         const r5 = SColl(SByte, encryptedPayload).toHex();
+        const r6 = SColl(SByte, new TextEncoder().encode(nftContract)).toHex();
 
         // Build request output at guard address
         const requestOutput = new OutputBuilder(SAFE_MIN_BOX_VALUE, this.guardAddress)
@@ -67,7 +68,7 @@ export class ClientTxBuilder {
                 amount: 1n,
                 name: 'blockhost-request',
             })
-            .setAdditionalRegisters({ R4: r4, R5: r5 });
+            .setAdditionalRegisters({ R4: r4, R5: r5, R6: r6 });
 
         const unsignedTx = new TransactionBuilder(height)
             .from(inputs)
