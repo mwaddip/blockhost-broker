@@ -50,7 +50,7 @@
       ]
     },
     "ergo": {
-      "wallet_pattern": "^[1-9A-HJ-NP-Za-km-z]{40,200}$",
+      "wallet_pattern": "^[1-9A-HJ-NP-Za-km-z]{40,60}$",
       "contract_validation": "^[0-9a-fA-F]{64}$",
       "fields": [
         {
