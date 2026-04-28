@@ -200,6 +200,9 @@ impl Ipam {
         // Find the lowest unused index in [1, max_index] using a recursive CTE.
         // Index 0 is reserved for the broker. The CTE walks integers and stops
         // at the first one not present in `allocations.prefix_index`.
+        // No ORDER BY: it would force SQLite to materialize the full CTE
+        // (up to 2^56 rows for /64 + /120) before applying LIMIT. The recursion
+        // produces rows in ascending order, so LIMIT 1 yields the lowest match.
         let next: Option<i64> = sqlx::query_scalar(
             r#"
             WITH RECURSIVE candidates(i) AS (
@@ -209,7 +212,6 @@ impl Ipam {
             )
             SELECT i FROM candidates
             WHERE i NOT IN (SELECT prefix_index FROM allocations)
-            ORDER BY i
             LIMIT 1
             "#,
         )
