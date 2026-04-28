@@ -26,7 +26,7 @@ import {
     serverKeypairFromHex,
     serializeRequestPayload,
     type TunnelConfig,
-} from './crypto.js';
+} from '../../../_shared/src/client-crypto.js';
 import {
     ClientTxBuilder,
     loadSigner,

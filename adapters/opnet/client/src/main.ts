@@ -42,7 +42,7 @@ import {
     generateServerKeypair,
     serverKeypairFromHex,
     serializeRequestPayload,
-} from './crypto.js';
+} from '../../../_shared/src/client-crypto.js';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 

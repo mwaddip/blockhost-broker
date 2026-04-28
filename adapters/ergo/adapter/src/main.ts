@@ -9,7 +9,8 @@
 
 import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
-import { EciesEncryption, serializeResponse, type ResponsePayload } from './crypto.js';
+import { EciesEncryption, serializeResponse, type ResponsePayload } from '../../../_shared/src/adapter-crypto.js';
+import { requestAllocation, type AllocationResponse } from '../../../_shared/src/broker-api.js';
 import { RequestPoller, type RequestBox } from './poller.js';
 import { ResponseTxBuilder } from './tx-builder.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -42,38 +43,6 @@ function saveState(processedBeacons: Set<string>): void {
     fs.writeFileSync(config.stateFile, JSON.stringify(data) + '\n');
 }
 
-// ── Broker API client ──────────────────────────────────────────────
-
-interface AllocationResponse {
-    prefix: string;
-    gateway: string;
-    broker_pubkey: string;
-    broker_endpoint: string;
-}
-
-async function requestAllocation(wgPubkey: string, nftContract: string): Promise<AllocationResponse> {
-    const url = `${config.brokerApiUrl}/v1/allocations`;
-    const body = JSON.stringify({
-        wg_pubkey: wgPubkey,
-        nft_contract: nftContract,
-        source: config.source,
-        ...(config.leaseDuration > 0 && { lease_duration: config.leaseDuration }),
-    });
-
-    const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-    });
-
-    if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Broker API ${resp.status}: ${text}`);
-    }
-
-    return (await resp.json()) as AllocationResponse;
-}
-
 // ── Request handler ─────────────────────────────────────────────────
 
 const encryption = new EciesEncryption(config.eciesPrivateKey);
@@ -96,7 +65,11 @@ async function handleNewRequests(requests: RequestBox[]): Promise<void> {
         // Request allocation from broker
         let allocation: AllocationResponse;
         try {
-            allocation = await requestAllocation(payload.wgPubkey, req.nftContract);
+            allocation = await requestAllocation(payload.wgPubkey, req.nftContract, {
+                brokerApiUrl: config.brokerApiUrl,
+                source: config.source,
+                leaseDuration: config.leaseDuration,
+            });
         } catch (err) {
             console.error(`[adapter] Allocation failed:`, err);
             continue;

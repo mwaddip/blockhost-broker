@@ -1,6 +1,7 @@
 //! WireGuard interface management.
 
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use chrono::{DateTime, TimeZone, Utc};
 use ipnet::Ipv6Net;
@@ -73,6 +74,42 @@ impl WireGuardManager {
                 None
             }
         }
+    }
+
+    /// Run a batch of `ip` commands in a single subprocess.
+    ///
+    /// Each line in `commands` becomes one `ip` invocation. `-force` makes
+    /// the batch continue on per-line errors instead of aborting. Used to
+    /// add/remove NDP proxy entries for a /120 (256 entries) without spawning
+    /// 256 subprocesses.
+    fn run_ip_batch(&self, commands: &str) -> Result<(), WireGuardError> {
+        debug!(line_count = commands.lines().count(), "Running ip batch");
+
+        let mut child = Command::new("ip")
+            .args(["-force", "-batch", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| WireGuardError::CommandFailed(format!("spawn ip -batch: {}", e)))?;
+
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| WireGuardError::CommandFailed("missing stdin handle".to_string()))?;
+        stdin
+            .write_all(commands.as_bytes())
+            .map_err(|e| WireGuardError::CommandFailed(format!("write to ip -batch: {}", e)))?;
+
+        let output = child
+            .wait_with_output()
+            .map_err(|e| WireGuardError::CommandFailed(format!("wait for ip -batch: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(WireGuardError::CommandFailed(stderr.to_string()));
+        }
+        Ok(())
     }
 
     /// Add a WireGuard peer.
@@ -280,19 +317,17 @@ impl WireGuardManager {
     fn add_ndp_proxy_for_prefix(&self, prefix: &Ipv6Net, upstream_interface: &str) {
         let addresses = Self::prefix_addresses(prefix);
         let count = addresses.len();
+        let batch = Self::ndp_batch(&addresses, "add", upstream_interface);
 
-        for addr in addresses {
-            let addr_str = addr.to_string();
-            let _ = self.run_command_best_effort(&[
-                "ip",
-                "-6",
-                "neigh",
-                "add",
-                "proxy",
-                &addr_str,
-                "dev",
-                upstream_interface,
-            ]);
+        if let Err(e) = self.run_ip_batch(&batch) {
+            warn!(
+                prefix = %prefix,
+                count = count,
+                interface = %upstream_interface,
+                error = %e,
+                "Failed to add NDP proxy entries (some entries may not be installed)"
+            );
+            return;
         }
 
         info!(
@@ -307,19 +342,17 @@ impl WireGuardManager {
     fn remove_ndp_proxy_for_prefix(&self, prefix: &Ipv6Net, upstream_interface: &str) {
         let addresses = Self::prefix_addresses(prefix);
         let count = addresses.len();
+        let batch = Self::ndp_batch(&addresses, "del", upstream_interface);
 
-        for addr in addresses {
-            let addr_str = addr.to_string();
-            let _ = self.run_command_best_effort(&[
-                "ip",
-                "-6",
-                "neigh",
-                "del",
-                "proxy",
-                &addr_str,
-                "dev",
-                upstream_interface,
-            ]);
+        if let Err(e) = self.run_ip_batch(&batch) {
+            warn!(
+                prefix = %prefix,
+                count = count,
+                interface = %upstream_interface,
+                error = %e,
+                "Failed to remove NDP proxy entries (some entries may persist)"
+            );
+            return;
         }
 
         debug!(
@@ -328,6 +361,14 @@ impl WireGuardManager {
             interface = %upstream_interface,
             "Removed NDP proxy entries for prefix"
         );
+    }
+
+    fn ndp_batch(addresses: &[std::net::Ipv6Addr], op: &str, dev: &str) -> String {
+        let mut s = String::with_capacity(addresses.len() * 64);
+        for addr in addresses {
+            s.push_str(&format!("-6 neigh {} proxy {} dev {}\n", op, addr, dev));
+        }
+        s
     }
 }
 

@@ -157,90 +157,55 @@ async fn create_allocation(
 ) -> Result<(StatusCode, Json<CreateAllocationResponse>), (StatusCode, Json<ErrorResponse>)> {
     let nft_contract = body.nft_contract.to_lowercase();
 
-    let ipam = state.ipam.lock().await;
-    let existing = ipam
-        .get_allocation_by_nft_contract(&nft_contract)
-        .await
-        .map_err(|e| {
+    let outcome = crate::alloc::allocate_or_update(
+        &state.ipam,
+        &state.wg,
+        &body.wg_pubkey,
+        &nft_contract,
+        body.is_test,
+        &body.source,
+        body.lease_duration,
+    )
+    .await
+    .map_err(|e| match e {
+        crate::alloc::AllocateOrUpdateError::PubkeyAlreadyAllocated => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "WireGuard pubkey already has an allocation".to_string(),
+            }),
+        ),
+        crate::alloc::AllocateOrUpdateError::NoPrefixesAvailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "No prefixes available".to_string(),
+            }),
+        ),
+        crate::alloc::AllocateOrUpdateError::Database(err) => {
+            warn!(nft_contract = %nft_contract, error = %err, "Allocation database error");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e.to_string() }),
+                Json(ErrorResponse { error: err.to_string() }),
             )
-        })?;
+        }
+        crate::alloc::AllocateOrUpdateError::WireGuard(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to add WireGuard peer: {}", err),
+            }),
+        ),
+    })?;
 
-    let allocation = if let Some(existing) = existing {
-        // Re-request: update pubkey, swap WG peer
+    let allocation = outcome.allocation;
+    if let Some(old_pubkey) = outcome.previous_pubkey.as_deref() {
         info!(
             nft_contract = %nft_contract,
-            prefix = %existing.prefix,
-            old_pubkey = %existing.pubkey,
+            prefix = %allocation.prefix,
+            old_pubkey = old_pubkey,
             new_pubkey = %body.wg_pubkey,
-            "Re-request from existing allocation, updating pubkey"
+            "Re-request from existing allocation, rotated pubkey"
         );
+    }
 
-        let updated = ipam
-            .update_allocation_pubkey(&nft_contract, &body.wg_pubkey, None)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse { error: e.to_string() }),
-                )
-            })?;
-        drop(ipam);
-
-        let _ = state.wg.remove_peer(&existing.pubkey);
-        state
-            .wg
-            .add_peer(&body.wg_pubkey, &updated.prefix, None)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to add WireGuard peer: {}", e),
-                    }),
-                )
-            })?;
-
-        updated
-    } else {
-        // New allocation
-        let allocation = ipam
-            .allocate(&body.wg_pubkey, &nft_contract, None, body.is_test, &body.source, body.lease_duration)
-            .await
-            .map_err(|e| {
-                let (status, msg) = match &e {
-                    crate::db::ipam::IpamError::PubkeyAlreadyAllocated => {
-                        (StatusCode::CONFLICT, "WireGuard pubkey already has an allocation")
-                    }
-                    crate::db::ipam::IpamError::NoPrefixesAvailable => {
-                        (StatusCode::SERVICE_UNAVAILABLE, "No prefixes available")
-                    }
-                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Allocation failed"),
-                };
-                warn!(nft_contract = %nft_contract, error = %e, "Allocation failed");
-                (status, Json(ErrorResponse { error: msg.to_string() }))
-            })?;
-        drop(ipam);
-
-        // Add WireGuard peer
-        if let Err(e) = state.wg.add_peer(&body.wg_pubkey, &allocation.prefix, None) {
-            // Rollback
-            warn!(error = %e, "Failed to add WG peer, rolling back allocation");
-            let ipam = state.ipam.lock().await;
-            let _ = ipam.release(&allocation.prefix.to_string(), &nft_contract).await;
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to add WireGuard peer: {}", e),
-                }),
-            ));
-        }
-
-        allocation
-    };
-
-    // Build response from broker config
     let broker_pubkey = state.wg.get_public_key().unwrap_or_default();
 
     info!(

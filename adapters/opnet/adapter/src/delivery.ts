@@ -36,104 +36,14 @@ import {
 } from '@btc-vision/transaction';
 import { opcodes, script, type Network, type Satoshi, type Script } from '@btc-vision/bitcoin';
 import type { JSONRpcProvider } from 'opnet';
-import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
-import { sha256 } from '@noble/hashes/sha2.js';
-import { gcm } from '@noble/ciphers/aes.js';
-import type { ResponsePayload } from './crypto.js';
+import {
+    encryptCompact,
+    serializeResponse,
+    type ResponsePayload,
+} from '../../../_shared/src/adapter-crypto.js';
 
 const FRAME_VERSION = 0x01;
 const AES_TAG_LEN = 16;
-const AES_IV_LEN = 12;
-
-// ── Binary serialization ────────────────────────────────────────────
-
-/** Serialize only the fields needed for tunnel establishment. */
-export function serializeResponse(resp: ResponsePayload): Uint8Array {
-    const buf = new Uint8Array(63);
-    let offset = 0;
-
-    // WireGuard public key (base64 → 32 raw bytes)
-    const wgKey = Buffer.from(resp.brokerPubkey, 'base64');
-    if (wgKey.length !== 32) {
-        throw new Error(`Invalid WG pubkey length: ${wgKey.length}`);
-    }
-    buf.set(wgKey, offset);
-    offset += 32;
-
-    // Endpoint IPv4 (4 bytes)
-    const [epHost, epPortStr] = resp.brokerEndpoint.split(':');
-    const ipParts = epHost.split('.');
-    if (ipParts.length !== 4) {
-        throw new Error(`Invalid IPv4 endpoint: ${epHost}`);
-    }
-    for (let i = 0; i < 4; i++) {
-        buf[offset++] = parseInt(ipParts[i], 10);
-    }
-
-    // Endpoint port (2 bytes BE)
-    const port = parseInt(epPortStr, 10);
-    buf[offset++] = (port >> 8) & 0xff;
-    buf[offset++] = port & 0xff;
-
-    // Prefix mask length (1 byte)
-    const slashIdx = resp.prefix.indexOf('/');
-    if (slashIdx === -1) {
-        throw new Error(`Invalid prefix (no mask): ${resp.prefix}`);
-    }
-    buf[offset++] = parseInt(resp.prefix.slice(slashIdx + 1), 10);
-
-    // Prefix network (16 bytes IPv6)
-    const prefixAddr = resp.prefix.slice(0, slashIdx);
-    const ipv6Bytes = ipv6ToBytes(prefixAddr);
-    buf.set(ipv6Bytes, offset);
-    offset += 16;
-
-    // Gateway host part (lower 64 bits of gateway IPv6, 8 bytes)
-    const gwBytes = ipv6ToBytes(resp.gateway);
-    buf.set(gwBytes.slice(8, 16), offset);
-
-    return buf;
-}
-
-// ── Compact encryption (ECDH-derived key + deterministic IV) ────────
-
-export function deriveKeyAndIv(
-    senderPrivkey: Uint8Array,
-    recipientPubkey: Uint8Array,
-): { aesKey: Uint8Array; iv: Uint8Array } {
-    const shared = secp256k1.getSharedSecret(senderPrivkey, recipientPubkey);
-    // Skip the 0x04 prefix byte from the uncompressed shared point
-    const ikm = shared.slice(1);
-
-    const aesKey = hkdf(sha256, ikm, undefined, new TextEncoder().encode('blockhost-aes-key'), 32);
-    const iv = hkdf(sha256, ikm, undefined, new TextEncoder().encode('blockhost-aes-iv'), AES_IV_LEN);
-
-    return { aesKey, iv };
-}
-
-export function encryptCompact(
-    plaintext: Uint8Array,
-    senderPrivkey: Uint8Array,
-    recipientPubkey: Uint8Array,
-): Uint8Array {
-    const { aesKey, iv } = deriveKeyAndIv(senderPrivkey, recipientPubkey);
-
-    const cipher = gcm(aesKey, iv);
-    // gcm.encrypt returns ciphertext || tag
-    return cipher.encrypt(plaintext);
-}
-
-export function decryptCompact(
-    ciphertext: Uint8Array,
-    receiverPrivkey: Uint8Array,
-    senderPubkey: Uint8Array,
-): Uint8Array {
-    const { aesKey, iv } = deriveKeyAndIv(receiverPrivkey, senderPubkey);
-
-    const decipher = gcm(aesKey, iv);
-    return decipher.decrypt(ciphertext);
-}
 
 // ── OP_RETURN construction ──────────────────────────────────────────
 
@@ -280,34 +190,4 @@ export class ResponseDelivery {
 
         return txid;
     }
-}
-
-// ── IPv6 helpers ────────────────────────────────────────────────────
-
-function ipv6ToBytes(addr: string): Uint8Array {
-    const expanded = expandIPv6(addr);
-    const parts = expanded.split(':');
-    const buf = new Uint8Array(16);
-    for (let i = 0; i < 8; i++) {
-        const val = parseInt(parts[i], 16);
-        buf[i * 2] = (val >> 8) & 0xff;
-        buf[i * 2 + 1] = val & 0xff;
-    }
-    return buf;
-}
-
-function expandIPv6(addr: string): string {
-    if (addr.includes('::')) {
-        const [left, right] = addr.split('::');
-        const leftParts = left ? left.split(':') : [];
-        const rightParts = right ? right.split(':') : [];
-        const missing = 8 - leftParts.length - rightParts.length;
-        const middle = Array(missing).fill('0000');
-        const all = [...leftParts, ...middle, ...rightParts];
-        return all.map((p) => p.padStart(4, '0')).join(':');
-    }
-    return addr
-        .split(':')
-        .map((p) => p.padStart(4, '0'))
-        .join(':');
 }

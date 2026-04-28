@@ -104,10 +104,6 @@ pub struct BrokerConfig {
 
     /// Broker's own IPv6 address.
     pub broker_ipv6: Ipv6Addr,
-
-    /// Optional capacity limit (synced to on-chain totalCapacity).
-    /// If not set, on-chain totalCapacity stays 0 (unlimited).
-    pub max_allocations: Option<u64>,
 }
 
 impl Default for BrokerConfig {
@@ -116,7 +112,6 @@ impl Default for BrokerConfig {
             upstream_prefix: "2a11:6c7:f04:276::/64".parse().unwrap(),
             allocation_size: 120,
             broker_ipv6: "2a11:6c7:f04:276::2".parse().unwrap(),
-            max_allocations: None,
         }
     }
 }
@@ -387,7 +382,6 @@ mod tests {
             upstream_prefix: "2001:db8::/48".parse().unwrap(),
             allocation_size: 64,
             broker_ipv6: "2001:db8::1".parse().unwrap(),
-            max_allocations: None,
         };
         // /48 to /64 = 16 bits = 65535 allocations (minus 1 reserved)
         assert_eq!(config.theoretical_max_allocations(), 65535);

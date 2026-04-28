@@ -22,8 +22,8 @@ await esbuild.build({
     target: 'node22',
     banner: { js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
     alias: {
-        'undici': './src/undici-shim.ts',
-        'bip39': './src/bip39-shim.ts',
+        'undici': '../../_shared/src/undici-shim.ts',
+        'bip39': '../../_shared/src/bip39-shim.ts',
     },
     plugins: [stripAbisPlugin],
 });

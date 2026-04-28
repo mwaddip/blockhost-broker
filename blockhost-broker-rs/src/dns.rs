@@ -166,7 +166,7 @@ fn handle_query(data: &[u8], config: &DnsConfig, prefix: Ipv6Net) -> Result<Vec<
             if is_apex || is_ns1 {
                 build_nodata_response(&query, domain, config)
             } else {
-                build_aaaa_response(&query, question, domain, config, prefix)
+                build_aaaa_response(&query, question, domain, &qname_lower, &domain_lower, config, prefix)
             }
         }
         // Any other type at apex → NODATA
@@ -262,14 +262,12 @@ fn build_aaaa_response(
     query: &Packet,
     question: &Question,
     domain: &str,
+    qname_lower: &str,
+    domain_lower: &str,
     config: &DnsConfig,
     prefix: Ipv6Net,
 ) -> Result<Vec<u8>> {
-    let qname = question.qname.to_string();
-    let qname_lower = qname.to_ascii_lowercase();
-    let domain_lower = domain.to_ascii_lowercase();
-
-    let host_label = match extract_host_label(&qname_lower, &domain_lower) {
+    let host_label = match extract_host_label(qname_lower, domain_lower) {
         Some(l) => l,
         None => return build_nxdomain_response(query, domain, config),
     };

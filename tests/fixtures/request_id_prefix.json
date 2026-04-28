@@ -1,0 +1,27 @@
+{
+    "_": "Cross-language fixture for the broker response request_id prefix format.",
+    "_description": [
+        "The broker prepends an 8-byte big-endian unsigned 64-bit integer (the on-chain request ID)",
+        "to every response payload it sends back to the requester. The client uses this prefix to",
+        "correlate a response transaction with the request it submitted, without having to attempt",
+        "decryption on every transaction it receives.",
+        "",
+        "This file is the single source of truth. Both the Rust broker (blockhost-broker-rs) and",
+        "the Python broker-client read the same cases below and verify their encode/decode logic",
+        "produces matching bytes."
+    ],
+    "version": 1,
+    "prefix_length_bytes": 8,
+    "encoding": "big-endian unsigned 64-bit integer",
+    "cases": [
+        {"id": 0,                    "prefix_hex": "0000000000000000"},
+        {"id": 1,                    "prefix_hex": "0000000000000001"},
+        {"id": 255,                  "prefix_hex": "00000000000000ff"},
+        {"id": 256,                  "prefix_hex": "0000000000000100"},
+        {"id": 305419896,            "prefix_hex": "0000000012345678"},
+        {"id": 4294967295,           "prefix_hex": "00000000ffffffff"},
+        {"id": 4294967296,           "prefix_hex": "0000000100000000"},
+        {"id": 18446744073709551614, "prefix_hex": "fffffffffffffffe"},
+        {"id": 18446744073709551615, "prefix_hex": "ffffffffffffffff"}
+    ]
+}

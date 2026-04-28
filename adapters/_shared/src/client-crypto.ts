@@ -1,9 +1,11 @@
 /**
- * Crypto for the OPNet client.
+ * Shared client-side crypto + serialization.
  *
- * Request encryption: full ECIES (eciespy-compatible) with broker's pubkey.
- * Response decryption: compact ECDH-derived AES-GCM (matches adapter's delivery.ts).
- * WireGuard key generation: x25519.
+ * Used by Cardano, Ergo, and OPNet broker clients.
+ *
+ * - Request encryption: full ECIES (eciespy-compatible) with broker's pubkey.
+ * - Response decryption: compact ECDH-derived AES-GCM (matches adapter encryption).
+ * - WireGuard key generation: x25519.
  */
 
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -14,11 +16,6 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { randomBytes } from 'crypto';
 
 // ── ECIES encryption (eciespy-compatible, for request payloads) ─────
-//
-// Format: [65 bytes ephemeral uncompressed pubkey]
-//         [16 bytes AES-GCM tag]
-//         [16 bytes AES-GCM nonce/iv]
-//         [... ciphertext ...]
 
 const UNCOMPRESSED_KEY_LEN = 65;
 const ECIES_TAG_LEN = 16;
@@ -50,11 +47,7 @@ export function eciesEncrypt(
     return result;
 }
 
-// ── Compact decryption (ECDH-derived AES-GCM, for OP_RETURN responses) ──
-//
-// The broker encrypts with ECDH(broker_priv, client_serverPubkey).
-// The client decrypts with ECDH(client_serverPriv, broker_eciesPubkey).
-// IV is derived deterministically — not in the payload.
+// ── Compact decryption (ECDH-derived AES-GCM, for response datums) ──
 
 const COMPACT_AES_IV_LEN = 12;
 
@@ -89,18 +82,19 @@ export function decryptCompact(
 
 // ── Response deserialization ────────────────────────────────────────
 //
-// Binary layout (55 bytes):
+// Binary layout (63 bytes):
 //   [32 bytes broker WG pubkey]
 //   [4  bytes broker endpoint IPv4]
 //   [2  bytes broker endpoint port BE]
 //   [1  byte  prefix mask length]
 //   [16 bytes prefix network (IPv6)]
+//   [8  bytes gateway host part (lower 64 bits)]
 
 export interface TunnelConfig {
-    brokerPubkey: string; // base64
-    brokerEndpoint: string; // ip:port
-    prefix: string; // CIDR
-    gateway: string; // broker WireGuard address (upstream::2)
+    brokerPubkey: string;
+    brokerEndpoint: string;
+    prefix: string;
+    gateway: string;
 }
 
 export function deserializeResponse(data: Uint8Array): TunnelConfig {
@@ -121,7 +115,6 @@ export function deserializeResponse(data: Uint8Array): TunnelConfig {
 
     const mask = data[offset++];
 
-    // Reconstruct prefix IPv6 (16 bytes)
     const prefixParts: string[] = [];
     for (let i = 0; i < 8; i++) {
         const val = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
@@ -130,7 +123,6 @@ export function deserializeResponse(data: Uint8Array): TunnelConfig {
     const prefix = compressIPv6(prefixParts.join(':'));
     offset += 16;
 
-    // Reconstruct gateway: upper 64 bits from prefix, lower 64 bits from payload
     const gwParts = prefixParts.slice(0, 4);
     for (let i = 0; i < 4; i++) {
         const val = (data[offset + i * 2] << 8) | data[offset + i * 2 + 1];
@@ -146,10 +138,8 @@ export function deserializeResponse(data: Uint8Array): TunnelConfig {
     };
 }
 
-
 function compressIPv6(addr: string): string {
     const parts = addr.split(':').map((p) => p.replace(/^0+/, '') || '0');
-    // Find longest run of consecutive '0' groups
     let bestStart = -1;
     let bestLen = 0;
     let curStart = -1;
@@ -185,7 +175,7 @@ export interface WgKeypair {
 }
 
 export function generateWgKeypair(): WgKeypair {
-    const privateKey = x25519.utils.randomPrivateKey();
+    const privateKey = x25519.utils.randomSecretKey();
     const publicKey = x25519.getPublicKey(privateKey);
     return {
         privateKey,
@@ -199,8 +189,8 @@ export function generateWgKeypair(): WgKeypair {
 
 export interface ServerKeypair {
     privateKey: Uint8Array;
-    publicKeyCompressed: Uint8Array; // 33 bytes
-    publicKeyUncompressed: Uint8Array; // 65 bytes (for ECDH with broker)
+    publicKeyCompressed: Uint8Array;
+    publicKeyUncompressed: Uint8Array;
 }
 
 export function generateServerKeypair(): ServerKeypair {
@@ -224,10 +214,6 @@ export function serverKeypairFromHex(hex: string): ServerKeypair {
 }
 
 // ── Binary request payload ──────────────────────────────────────────
-//
-// Layout (65 bytes):
-//   [32 bytes WireGuard pubkey (raw)]
-//   [33 bytes compressed secp256k1 server pubkey]
 
 export function serializeRequestPayload(
     wgPubkey: Uint8Array,

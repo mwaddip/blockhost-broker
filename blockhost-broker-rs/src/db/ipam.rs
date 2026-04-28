@@ -155,21 +155,25 @@ impl Ipam {
         .execute(&self.pool)
         .await?;
 
-        // Migrate: add is_test, expires_at, source columns (idempotent — ignore if already exist)
-        let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN expires_at TEXT")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE allocations ADD COLUMN source TEXT NOT NULL DEFAULT 'evm'")
-            .execute(&self.pool)
-            .await;
+        // Migrate: add is_test, expires_at, source columns (idempotent — ignore "duplicate column" errors only).
+        Self::add_column_if_missing(&self.pool, "ALTER TABLE allocations ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0").await?;
+        Self::add_column_if_missing(&self.pool, "ALTER TABLE allocations ADD COLUMN expires_at TEXT").await?;
+        Self::add_column_if_missing(&self.pool, "ALTER TABLE allocations ADD COLUMN source TEXT NOT NULL DEFAULT 'evm'").await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_allocations_expires_at ON allocations(expires_at)")
             .execute(&self.pool)
             .await?;
 
         Ok(())
+    }
+
+    /// Run an `ALTER TABLE ... ADD COLUMN` and ignore SQLite's "duplicate column" error
+    /// (column already added by a prior run). All other errors propagate.
+    async fn add_column_if_missing(pool: &Pool<Sqlite>, sql: &str) -> Result<(), IpamError> {
+        match sqlx::query(sql).execute(pool).await {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(db_err)) if db_err.message().contains("duplicate column name") => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Calculate subnet from index.
@@ -193,23 +197,27 @@ impl Ipam {
             return Ok(None);
         };
 
-        // Get all used indices
-        let used_indices: Vec<i64> = sqlx::query_scalar(
-            "SELECT prefix_index FROM allocations ORDER BY prefix_index",
+        // Find the lowest unused index in [1, max_index] using a recursive CTE.
+        // Index 0 is reserved for the broker. The CTE walks integers and stops
+        // at the first one not present in `allocations.prefix_index`.
+        let next: Option<i64> = sqlx::query_scalar(
+            r#"
+            WITH RECURSIVE candidates(i) AS (
+                SELECT 1
+                UNION ALL
+                SELECT i + 1 FROM candidates WHERE i < ?
+            )
+            SELECT i FROM candidates
+            WHERE i NOT IN (SELECT prefix_index FROM allocations)
+            ORDER BY i
+            LIMIT 1
+            "#,
         )
-        .fetch_all(&self.pool)
+        .bind(max_index)
+        .fetch_optional(&self.pool)
         .await?;
 
-        let used_set: std::collections::HashSet<i64> = used_indices.into_iter().collect();
-
-        // Find first available (start at 1, reserve 0 for broker)
-        for i in 1..=max_index {
-            if !used_set.contains(&i) {
-                return Ok(Some(i));
-            }
-        }
-
-        Ok(None)
+        Ok(next)
     }
 
     /// Allocate a new prefix.

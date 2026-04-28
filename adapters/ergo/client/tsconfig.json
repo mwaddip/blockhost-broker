@@ -5,10 +5,8 @@
         "target": "ESNext",
         "moduleResolution": "bundler",
         "esModuleInterop": true,
-        "outDir": "dist",
-        "declaration": true,
-        "sourceMap": true,
+        "noEmit": true,
         "skipLibCheck": true
     },
-    "include": ["src"]
+    "include": ["src", "../../_shared/src"]
 }

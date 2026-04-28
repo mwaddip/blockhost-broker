@@ -581,6 +581,11 @@ class BrokerClient:
             encrypted_payload,
         ).estimate_gas({"from": account.address})
 
+        # Cache gas_price so the cap and tip are derived from a single sample.
+        # Two separate eth.gas_price calls in a volatile mempool can return
+        # different numbers, producing a tip greater than the cap.
+        gas_price = self.w3.eth.gas_price
+
         tx = contract.functions.submitRequest(
             Web3.to_checksum_address(nft_contract),
             encrypted_payload,
@@ -589,8 +594,8 @@ class BrokerClient:
                 "from": account.address,
                 "nonce": self.w3.eth.get_transaction_count(account.address),
                 "gas": gas_estimate + GAS_BUFFER,
-                "maxFeePerGas": self.w3.eth.gas_price * 2,
-                "maxPriorityFeePerGas": self.w3.eth.gas_price,
+                "maxFeePerGas": gas_price * 2,
+                "maxPriorityFeePerGas": gas_price,
                 "chainId": self.chain_id,
             }
         )

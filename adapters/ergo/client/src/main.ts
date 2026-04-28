@@ -23,7 +23,7 @@ import {
     generateWgKeypair,
     generateServerKeypair,
     serializeRequestPayload,
-} from './crypto.js';
+} from '../../../_shared/src/client-crypto.js';
 import { ClientTxBuilder } from './tx-builder.js';
 import {
     getBoxesByTokenId,

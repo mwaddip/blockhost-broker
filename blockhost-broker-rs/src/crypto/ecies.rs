@@ -226,7 +226,7 @@ mod tests {
         let recipient = EciesEncryption::new();
 
         let plaintext = b"Hello, World!";
-        let ciphertext = sender.encrypt_for(plaintext, recipient.public_key_bytes()).unwrap();
+        let ciphertext = sender.encrypt_for(plaintext, &recipient.public_key).unwrap();
         let decrypted = recipient.decrypt(&ciphertext).unwrap();
 
         assert_eq!(decrypted, plaintext);
@@ -245,7 +245,7 @@ mod tests {
             dns_zone: None,
         };
 
-        let encrypted = sender.encrypt_json(&response, recipient.public_key_bytes()).unwrap();
+        let encrypted = sender.encrypt_json(&response, &recipient.public_key).unwrap();
         let decrypted: ResponsePayload = recipient.decrypt_json(&encrypted).unwrap();
 
         assert_eq!(decrypted.prefix, response.prefix);

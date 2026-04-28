@@ -32,6 +32,12 @@ export class RequestPoller {
     private pollIntervalMs = 20_000;
     private static readonly MAX_BACKOFF_MS = 5 * 60_000;
 
+    /** Blockfrost base URL, derived from the API key prefix at construction. */
+    private readonly blockfrostBaseUrl: string | null;
+    /** Cache of fetched datums by data_hash. Datums are immutable, so once fetched
+     *  for a UTXO that hash never changes. */
+    private readonly datumCache = new Map<string, unknown>();
+
     constructor(
         private koiosUrl: string,
         private blockfrostApiKey: string | null,
@@ -39,7 +45,19 @@ export class RequestPoller {
         private beaconPolicyId: string,
         private onNewRequests: RequestHandler,
         private onStateChange?: StateChangeHandler,
-    ) {}
+    ) {
+        if (blockfrostApiKey) {
+            if (blockfrostApiKey.includes('preview')) {
+                this.blockfrostBaseUrl = 'https://cardano-preview.blockfrost.io/api/v0';
+            } else if (blockfrostApiKey.includes('preprod')) {
+                this.blockfrostBaseUrl = 'https://cardano-preprod.blockfrost.io/api/v0';
+            } else {
+                this.blockfrostBaseUrl = 'https://cardano-mainnet.blockfrost.io/api/v0';
+            }
+        } else {
+            this.blockfrostBaseUrl = null;
+        }
+    }
 
     setProcessedRefs(refs: Set<string>): void {
         this.processedRefs = refs;
@@ -119,14 +137,7 @@ export class RequestPoller {
     }
 
     private async fetchFromBlockfrost(): Promise<RequestUtxo[]> {
-        // Blockfrost requires paginated queries
-        const baseUrl = this.blockfrostApiKey!.includes('preview')
-            ? 'https://cardano-preview.blockfrost.io/api/v0'
-            : this.blockfrostApiKey!.includes('preprod')
-              ? 'https://cardano-preprod.blockfrost.io/api/v0'
-              : 'https://cardano-mainnet.blockfrost.io/api/v0';
-
-        const url = `${baseUrl}/addresses/${this.validatorAddress}/utxos`;
+        const url = `${this.blockfrostBaseUrl!}/addresses/${this.validatorAddress}/utxos`;
         const resp = await fetch(url, {
             headers: { 'project_id': this.blockfrostApiKey! },
         });
@@ -196,17 +207,21 @@ export class RequestPoller {
                 const datumHash = utxo.data_hash;
                 if (!datumHash) return null;
 
-                const baseUrl = this.blockfrostApiKey!.includes('preview')
-                    ? 'https://cardano-preview.blockfrost.io/api/v0'
-                    : this.blockfrostApiKey!.includes('preprod')
-                      ? 'https://cardano-preprod.blockfrost.io/api/v0'
-                      : 'https://cardano-mainnet.blockfrost.io/api/v0';
-                const resp = await fetch(`${baseUrl}/scripts/datum/${datumHash}`, {
-                    headers: { 'project_id': this.blockfrostApiKey! },
-                });
-                if (!resp.ok) return null;
-                const datum: any = await resp.json();
-                datumValue = datum.json_value;
+                // Datums are immutable: once we've fetched for a hash, reuse it.
+                const cached = this.datumCache.get(datumHash);
+                if (cached !== undefined) {
+                    datumValue = cached;
+                } else {
+                    const resp = await fetch(`${this.blockfrostBaseUrl!}/scripts/datum/${datumHash}`, {
+                        headers: { 'project_id': this.blockfrostApiKey! },
+                    });
+                    if (!resp.ok) return null;
+                    const datum: any = await resp.json();
+                    datumValue = datum.json_value;
+                    if (datumValue !== undefined) {
+                        this.datumCache.set(datumHash, datumValue);
+                    }
+                }
             }
 
             if (!datumValue) return null;

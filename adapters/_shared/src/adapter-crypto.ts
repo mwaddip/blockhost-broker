@@ -1,15 +1,14 @@
 /**
- * ECIES encryption/decryption for request/response payloads.
+ * Shared adapter-side crypto + response serialization.
  *
- * Uses secp256k1 curve, compatible with the Rust broker's eciespy format.
- * Same scheme as the OPNet adapter.
+ * Used by Cardano, Ergo, and OPNet adapters. Each adapter imports from here
+ * but bundles independently via esbuild — no shared runtime dependency.
  */
 
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
-import { randomBytes } from 'crypto';
 
 // ── Payload types ────────────────────────────────────────────────────
 
@@ -25,15 +24,13 @@ export interface ResponsePayload {
     gateway: string;
     brokerPubkey: string;
     brokerEndpoint: string;
+    dnsZone?: string;
 }
 
-// ── ECIES (eciespy-compatible) ──────────────────────────────────────
+// ── ECIES (eciespy-compatible decrypt) ──────────────────────────────
 //
-// eciespy format:
-//   [65 bytes ephemeral uncompressed pubkey]
-//   [16 bytes AES-GCM tag]
-//   [16 bytes AES-GCM nonce/iv]
-//   [... ciphertext ...]
+// Format: [65 bytes ephemeral uncompressed pubkey] [16 bytes tag] [16 bytes iv] [ciphertext]
+// Shared secret: ECDH(ephemeral, recipient) → HKDF-SHA256
 
 const UNCOMPRESSED_KEY_LEN = 65;
 const TAG_LEN = 16;
@@ -60,9 +57,8 @@ function eciesDecrypt(data: Uint8Array, privateKey: Uint8Array): Uint8Array {
     return decipher.decrypt(combined);
 }
 
-// ── Compact encryption (for response datums) ────────────────────────
+// ── Compact encryption (ECDH-derived key + deterministic IV) ────────
 //
-// Same scheme as OPNet's OP_RETURN delivery:
 // ECDH(broker_priv, client_serverPubkey) → HKDF → AES-GCM
 // IV is derived deterministically — not in the payload.
 
@@ -91,7 +87,7 @@ export function encryptCompact(
     return cipher.encrypt(plaintext);
 }
 
-// ── High-level API ──────────────────────────────────────────────────
+// ── High-level adapter API ──────────────────────────────────────────
 
 export class EciesEncryption {
     private privateKey: Uint8Array;
@@ -120,9 +116,7 @@ export class EciesEncryption {
      */
     decryptRequestPayload(encoded: string): RequestPayload {
         const isHex = /^[0-9a-fA-F]+$/.test(encoded);
-        console.log(`[crypto] Payload: ${encoded.length} chars, isHex=${isHex}, preview=${encoded.slice(0, 40)}...`);
         const ciphertext = Buffer.from(encoded, isHex ? 'hex' : 'base64');
-        console.log(`[crypto] Decoded: ${ciphertext.length} bytes`);
         const plaintext = this.decrypt(ciphertext);
 
         if (plaintext.length !== 65) {
@@ -137,11 +131,10 @@ export class EciesEncryption {
 
     /**
      * Encrypt a response for the client's server pubkey using compact ECDH-AES-GCM.
-     * Returns the encrypted blob to store in the response datum.
+     * Returns the encrypted blob (ciphertext || tag).
      */
     encryptResponse(plaintext: Uint8Array, recipientServerPubkeyHex: string): Uint8Array {
         const recipientPub = Buffer.from(recipientServerPubkeyHex, 'hex');
-        // Ensure uncompressed
         const recipientPubUncompressed = recipientPub.length === 33
             ? Buffer.from(secp256k1.Point.fromHex(recipientPub.toString('hex')).toBytes(false))
             : recipientPub;
@@ -149,9 +142,9 @@ export class EciesEncryption {
     }
 }
 
-// ── Response serialization ──────────────────────────────────────────
+// ── Response serialization (63-byte binary) ─────────────────────────
 //
-// Binary layout (63 bytes) — same as OPNet's OP_RETURN format:
+// Layout — same across all adapters and OPNet's OP_RETURN format:
 //   [32 bytes broker WireGuard pubkey]
 //   [4  bytes broker endpoint IPv4]
 //   [2  bytes broker endpoint port BE]
@@ -163,7 +156,6 @@ export function serializeResponse(resp: ResponsePayload): Uint8Array {
     const buf = new Uint8Array(63);
     let offset = 0;
 
-    // WireGuard public key (base64 → 32 raw bytes)
     const wgKey = Buffer.from(resp.brokerPubkey, 'base64');
     if (wgKey.length !== 32) {
         throw new Error(`Invalid WG pubkey length: ${wgKey.length}`);
@@ -171,7 +163,6 @@ export function serializeResponse(resp: ResponsePayload): Uint8Array {
     buf.set(wgKey, offset);
     offset += 32;
 
-    // Endpoint IPv4 (4 bytes)
     const [epHost, epPortStr] = resp.brokerEndpoint.split(':');
     const ipParts = epHost.split('.');
     if (ipParts.length !== 4) {
@@ -181,61 +172,53 @@ export function serializeResponse(resp: ResponsePayload): Uint8Array {
         buf[offset++] = parseInt(ipParts[i], 10);
     }
 
-    // Endpoint port (2 bytes BE)
     const port = parseInt(epPortStr, 10);
     buf[offset++] = (port >> 8) & 0xff;
     buf[offset++] = port & 0xff;
 
-    // Prefix mask length (1 byte)
     const slashIdx = resp.prefix.indexOf('/');
     if (slashIdx === -1) {
         throw new Error(`Invalid prefix (no mask): ${resp.prefix}`);
     }
     buf[offset++] = parseInt(resp.prefix.slice(slashIdx + 1), 10);
 
-    // Prefix network (16 bytes IPv6)
     const prefixAddr = resp.prefix.slice(0, slashIdx);
     const ipv6Bytes = ipv6ToBytes(prefixAddr);
     buf.set(ipv6Bytes, offset);
     offset += 16;
 
-    // Gateway host part (lower 64 bits of gateway IPv6, 8 bytes)
     const gwBytes = ipv6ToBytes(resp.gateway);
     buf.set(gwBytes.slice(8, 16), offset);
 
     return buf;
 }
 
-function ipv6ToBytes(addr: string): Uint8Array {
-    // Expand :: notation
-    const parts = addr.split(':');
-    const expanded: string[] = [];
+// ── IPv6 helpers ────────────────────────────────────────────────────
 
-    for (let i = 0; i < parts.length; i++) {
-        if (parts[i] === '') {
-            // Handle :: expansion
-            if (i === 0 && parts[i + 1] === '') {
-                // Leading ::
-                const remaining = parts.filter((p) => p !== '').length;
-                for (let j = 0; j < 8 - remaining; j++) expanded.push('0');
-                i++; // skip next empty
-            } else {
-                const remaining = parts.filter((p) => p !== '').length;
-                for (let j = 0; j < 8 - remaining; j++) expanded.push('0');
-            }
-        } else {
-            expanded.push(parts[i]);
-        }
+export function expandIPv6(addr: string): string {
+    if (addr.includes('::')) {
+        const [left, right] = addr.split('::');
+        const leftParts = left ? left.split(':') : [];
+        const rightParts = right ? right.split(':') : [];
+        const missing = 8 - leftParts.length - rightParts.length;
+        const middle = Array(missing).fill('0000');
+        const all = [...leftParts, ...middle, ...rightParts];
+        return all.map((p) => p.padStart(4, '0')).join(':');
     }
+    return addr
+        .split(':')
+        .map((p) => p.padStart(4, '0'))
+        .join(':');
+}
 
-    // Pad to 8 groups
-    while (expanded.length < 8) expanded.push('0');
-
-    const bytes = new Uint8Array(16);
+export function ipv6ToBytes(addr: string): Uint8Array {
+    const expanded = expandIPv6(addr);
+    const parts = expanded.split(':');
+    const buf = new Uint8Array(16);
     for (let i = 0; i < 8; i++) {
-        const val = parseInt(expanded[i], 16);
-        bytes[i * 2] = (val >> 8) & 0xff;
-        bytes[i * 2 + 1] = val & 0xff;
+        const val = parseInt(parts[i], 16);
+        buf[i * 2] = (val >> 8) & 0xff;
+        buf[i * 2 + 1] = val & 0xff;
     }
-    return bytes;
+    return buf;
 }

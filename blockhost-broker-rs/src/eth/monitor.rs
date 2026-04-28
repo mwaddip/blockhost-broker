@@ -61,6 +61,10 @@ type SignerMiddleware = ethers::middleware::SignerMiddleware<Provider<Http>, Loc
 /// How long to wait for a WireGuard handshake after approval before releasing.
 const TUNNEL_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Length in bytes of the request-ID prefix prepended to response payloads.
+/// See `tests/fixtures/request_id_prefix.json` for the cross-language spec.
+const REQUEST_ID_PREFIX_LEN: usize = 8;
+
 /// An approved allocation awaiting WireGuard tunnel establishment.
 struct PendingVerification {
     nft_contract: Address,
@@ -367,21 +371,30 @@ impl OnchainMonitor {
             latest_per_nft.insert(req.nft_contract, req);
         }
 
-        // Process deduplicated requests
+        // Process deduplicated requests. Track the lowest request ID that failed
+        // transiently so we can leave the cursor before it and retry on the next poll.
+        // process_request returns Ok(()) for permanent rejections (verification fail,
+        // pubkey already allocated, no prefixes available); only Err is treated as transient.
+        let mut min_failed_id: Option<u64> = None;
         for (_, pending) in latest_per_nft {
             if let Err(e) = self.process_request(pending.clone(), contract_address).await {
                 warn!(
                     request_id = pending.id,
                     contract = contract_address,
                     error = %e,
-                    "Request processing failed (silent rejection)"
+                    "Request processing failed transiently, will retry on next poll"
                 );
+                min_failed_id = Some(min_failed_id.map_or(pending.id, |x| x.min(pending.id)));
             }
         }
 
-        // Update last processed ID to the latest we've seen
+        let new_cursor = match min_failed_id {
+            Some(id) => id.saturating_sub(1),
+            None => count,
+        };
+
         let ipam = self.ipam.lock().await;
-        ipam.set_last_processed_id_for_contract(contract_address, count).await?;
+        ipam.set_last_processed_id_for_contract(contract_address, new_cursor).await?;
 
         Ok(())
     }
@@ -421,39 +434,42 @@ impl OnchainMonitor {
             .decrypt_request_payload(&request.encrypted_payload)?;
 
         let nft_contract_str = format!("{:?}", request.nft_contract).to_lowercase();
+        let is_test = self.is_test_contract(contract_address);
+        let source = format!("evm:{}", contract_address);
 
-        // Check if this NFT contract already has an allocation
-        let ipam = self.ipam.lock().await;
-        let existing_allocation = ipam
-            .get_allocation_by_nft_contract(&nft_contract_str)
-            .await?;
+        let outcome = match crate::alloc::allocate_or_update(
+            &self.ipam,
+            &self.wg,
+            &payload.wg_pubkey,
+            &nft_contract_str,
+            is_test,
+            &source,
+            None,
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(crate::alloc::AllocateOrUpdateError::PubkeyAlreadyAllocated) => {
+                warn!(request_id = request.id, "WireGuard pubkey already has allocation");
+                return Ok(()); // Silent rejection
+            }
+            Err(crate::alloc::AllocateOrUpdateError::NoPrefixesAvailable) => {
+                error!(request_id = request.id, "No prefixes available");
+                return Ok(()); // Silent rejection
+            }
+            Err(crate::alloc::AllocateOrUpdateError::Database(e)) => return Err(e.into()),
+            Err(crate::alloc::AllocateOrUpdateError::WireGuard(e)) => return Err(e.into()),
+        };
 
-        let allocation = if let Some(existing) = existing_allocation {
-            // Re-request from the same NFT contract - update pubkey and re-send same allocation
+        let allocation = outcome.allocation;
+        if let Some(old_pubkey) = outcome.previous_pubkey.as_deref() {
             info!(
                 request_id = request.id,
-                prefix = %existing.prefix,
-                old_pubkey = %existing.pubkey,
+                prefix = %allocation.prefix,
+                old_pubkey = old_pubkey,
                 new_pubkey = %payload.wg_pubkey,
-                "Re-request from existing allocation, updating pubkey"
+                "Re-request from existing allocation, rotated pubkey"
             );
-
-            // Update the pubkey in the database
-            let updated = ipam
-                .update_allocation_pubkey(&nft_contract_str, &payload.wg_pubkey, None)
-                .await?;
-            drop(ipam);
-
-            // Remove old WireGuard peer and add new one
-            let _ = self.wg.remove_peer(&existing.pubkey);
-            if let Err(e) = self.wg.add_peer(&payload.wg_pubkey, &updated.prefix, None) {
-                error!(
-                    request_id = request.id,
-                    error = %e,
-                    "Failed to add WireGuard peer for re-request"
-                );
-                return Err(e.into());
-            }
 
             // Remove stale pending_verification for the old pubkey
             self.pending_verifications.retain(|pv| {
@@ -467,53 +483,7 @@ impl OnchainMonitor {
                 }
                 !same_nft
             });
-
-            updated
-        } else {
-            // New allocation
-            let is_test = self.is_test_contract(contract_address);
-            let source = format!("evm:{}", contract_address);
-            let allocation = match ipam
-                .allocate(
-                    &payload.wg_pubkey,
-                    &nft_contract_str,
-                    None,
-                    is_test,
-                    &source,
-                    None,
-                )
-                .await
-            {
-                Ok(alloc) => alloc,
-                Err(crate::db::ipam::IpamError::PubkeyAlreadyAllocated) => {
-                    warn!(
-                        request_id = request.id,
-                        "WireGuard pubkey already has allocation"
-                    );
-                    return Ok(()); // Silent rejection
-                }
-                Err(crate::db::ipam::IpamError::NoPrefixesAvailable) => {
-                    error!(request_id = request.id, "No prefixes available");
-                    return Ok(()); // Silent rejection
-                }
-                Err(e) => return Err(e.into()),
-            };
-            drop(ipam);
-
-            // Add WireGuard peer
-            if let Err(e) = self.wg.add_peer(&payload.wg_pubkey, &allocation.prefix, None) {
-                error!(
-                    request_id = request.id,
-                    error = %e,
-                    "Failed to add WireGuard peer"
-                );
-                // Rollback allocation
-                self.rollback_allocation(&payload.wg_pubkey, &allocation.prefix.to_string(), &nft_contract_str).await;
-                return Err(e.into());
-            }
-
-            allocation
-        };
+        }
 
         // Get broker WireGuard public key
         let wg_pubkey = match self.wg.get_public_key() {
@@ -587,9 +557,24 @@ impl OnchainMonitor {
 
     /// Rollback a failed allocation: remove WireGuard peer and release IPAM prefix.
     async fn rollback_allocation(&self, pubkey: &str, prefix: &str, nft_contract: &str) {
-        let _ = self.wg.remove_peer(pubkey);
+        if let Err(e) = self.wg.remove_peer(pubkey) {
+            warn!(
+                pubkey = pubkey,
+                prefix = prefix,
+                nft_contract = nft_contract,
+                error = %e,
+                "Rollback: failed to remove WireGuard peer (allocation may leak)"
+            );
+        }
         let ipam = self.ipam.lock().await;
-        let _ = ipam.release(prefix, nft_contract).await;
+        if let Err(e) = ipam.release(prefix, nft_contract).await {
+            warn!(
+                prefix = prefix,
+                nft_contract = nft_contract,
+                error = %e,
+                "Rollback: failed to release IPAM prefix (allocation may leak)"
+            );
+        }
     }
 
     /// Send an encrypted response as a direct transaction to the requester.
@@ -602,7 +587,7 @@ impl OnchainMonitor {
         requester: Address,
         encrypted_payload: Vec<u8>,
     ) -> Result<(), MonitorError> {
-        let mut prefixed_payload = Vec::with_capacity(8 + encrypted_payload.len());
+        let mut prefixed_payload = Vec::with_capacity(REQUEST_ID_PREFIX_LEN + encrypted_payload.len());
         prefixed_payload.extend_from_slice(&request_id.to_be_bytes());
         prefixed_payload.extend(encrypted_payload);
 
@@ -724,12 +709,26 @@ impl OnchainMonitor {
         prefix: &str,
         pubkey: &str,
     ) -> Result<(), MonitorError> {
-        // Remove WireGuard peer
-        let _ = self.wg.remove_peer(pubkey);
+        if let Err(e) = self.wg.remove_peer(pubkey) {
+            warn!(
+                pubkey = pubkey,
+                prefix = prefix,
+                nft_contract = %nft_contract,
+                error = %e,
+                "Release: failed to remove WireGuard peer (peer may leak)"
+            );
+        }
 
-        // Release from IPAM
+        let nft_contract_str = format!("{:?}", nft_contract).to_lowercase();
         let ipam = self.ipam.lock().await;
-        let _ = ipam.release(prefix, &format!("{:?}", nft_contract).to_lowercase()).await;
+        if let Err(e) = ipam.release(prefix, &nft_contract_str).await {
+            warn!(
+                prefix = prefix,
+                nft_contract = %nft_contract,
+                error = %e,
+                "Release: failed to release IPAM prefix (prefix may leak)"
+            );
+        }
 
         info!(
             nft_contract = %nft_contract,
@@ -738,5 +737,38 @@ impl OnchainMonitor {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::REQUEST_ID_PREFIX_LEN;
+
+    /// Verify the Rust encoder agrees with the cross-language fixture in
+    /// `tests/fixtures/request_id_prefix.json`. The Python broker-client reads
+    /// the same file in `scripts/test_request_id_prefix.py` — keep them paired.
+    #[test]
+    fn request_id_prefix_matches_fixture() {
+        let fixture_text = include_str!("../../../tests/fixtures/request_id_prefix.json");
+        let fixture: serde_json::Value = serde_json::from_str(fixture_text).expect("fixture JSON");
+
+        assert_eq!(
+            fixture["prefix_length_bytes"].as_u64().unwrap() as usize,
+            REQUEST_ID_PREFIX_LEN,
+            "fixture prefix_length_bytes must match Rust constant"
+        );
+
+        let cases = fixture["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty(), "fixture must have at least one case");
+
+        for case in cases {
+            let id = case["id"].as_u64().expect("id is u64");
+            let expected_hex = case["prefix_hex"].as_str().expect("prefix_hex");
+            let actual_hex = hex::encode(id.to_be_bytes());
+            assert_eq!(
+                actual_hex, expected_hex,
+                "id={} expected={} got={}", id, expected_hex, actual_hex,
+            );
+        }
     }
 }

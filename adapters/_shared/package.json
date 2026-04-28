@@ -1,0 +1,17 @@
+{
+    "name": "blockhost-adapter-shared",
+    "version": "0.1.0",
+    "type": "module",
+    "private": true,
+    "description": "Shared TypeScript modules for Blockhost broker adapters and clients. Source-level shared code; each adapter bundles independently via esbuild.",
+    "dependencies": {
+        "@noble/ciphers": "^2.1.1",
+        "@noble/curves": "^2.0.1",
+        "@noble/hashes": "^2.0.1",
+        "@scure/bip39": "^2.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.9.3"
+    }
+}

@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
 
@@ -160,10 +161,17 @@ def dashboard():
     """Main dashboard showing leases."""
     broker = get_broker_manager()
     leases = broker.get_leases()
-    wallet_info = broker.get_wallet_info()
-    btc_wallet_info = broker.get_btc_wallet_info()
-    cardano_wallet_info = broker.get_cardano_wallet_info()
-    ergo_wallet_info = broker.get_ergo_wallet_info()
+    # Wallet lookups for 4 chains hit external RPC endpoints. Run in parallel
+    # so the dashboard isn't bottlenecked on the slowest chain.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        wallet_future = pool.submit(broker.get_wallet_info)
+        btc_future = pool.submit(broker.get_btc_wallet_info)
+        cardano_future = pool.submit(broker.get_cardano_wallet_info)
+        ergo_future = pool.submit(broker.get_ergo_wallet_info)
+    wallet_info = wallet_future.result()
+    btc_wallet_info = btc_future.result()
+    cardano_wallet_info = cardano_future.result()
+    ergo_wallet_info = ergo_future.result()
     active_leases = [l for l in leases if not l.is_test]
     test_leases = [l for l in leases if l.is_test]
     evm_leases = [l for l in active_leases if l.source == "evm"]

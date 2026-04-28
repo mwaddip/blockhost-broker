@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod alloc;
 mod api;
 mod config;
 mod crypto;

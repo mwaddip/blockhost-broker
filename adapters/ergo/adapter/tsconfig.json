@@ -5,11 +5,9 @@
         "target": "ESNext",
         "moduleResolution": "bundler",
         "esModuleInterop": true,
-        "outDir": "dist",
-        "declaration": true,
-        "sourceMap": true,
+        "noEmit": true,
         "skipLibCheck": true
     },
-    "include": ["src", "../contracts/contracts.ts"],
+    "include": ["src", "../contracts/contracts.ts", "../../_shared/src"],
     "exclude": ["../contracts/compile-guard.ts"]
 }

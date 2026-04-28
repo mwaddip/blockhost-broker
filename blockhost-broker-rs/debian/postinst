@@ -43,10 +43,27 @@ case "$1" in
             echo "Upgrading blockhost-broker from $PREVIOUS_VERSION — preserving existing configuration"
             # Migrate ownership from root to blockhost user
             chown -R blockhost:blockhost "$CONFIG_DIR" "$DATA_DIR"
+
+            # Pick up updated systemd unit files (broker + adapter templates).
+            systemctl daemon-reload 2>/dev/null || true
+
+            # Restart the broker daemon if it was running.
             if systemctl is-active --quiet blockhost-broker 2>/dev/null; then
                 systemctl restart blockhost-broker
-                echo "Service restarted"
+                echo "Restarted blockhost-broker"
             fi
+
+            # Restart any active adapter instances. Templates use systemd's
+            # @-instance pattern (e.g. blockhost-ergo-adapter@testnet); the
+            # `list-units --state=active` sweep catches every enabled instance.
+            # Note: list-units indents lines with two spaces, so awk uses a
+            # substring match rather than `^`.
+            for unit in $(systemctl list-units --type=service --state=active --no-legend 2>/dev/null \
+                            | awk '/blockhost-(cardano|ergo|opnet)-adapter@.*\.service/ {print $1}'); do
+                systemctl restart "$unit"
+                echo "Restarted $unit"
+            done
+
             exit 0
         fi
 
