@@ -54,7 +54,6 @@ Test registry config fetched from: https://raw.githubusercontent.com/mwaddip/blo
 - **Broker Manager**: https://95.179.128.177:8443 (web UI for lease management)
 - **Operator Wallet**: `0x6A5973DDe7E57686122Eb12DA85389c53fe2EE4b` (key: `/etc/blockhost-broker/operator.key` — contract owner, used for on-chain txs)
 - **Deployer Wallet**: `0xe35B5D114eFEA216E6BB5Ff15C261d25dB9E2cb9` (key: `/etc/blockhost-broker/deployer.key` — NOT the contract owner)
-- **Ergo Relay**: `127.0.0.1:9064` (signing + P2P broadcast for Ergo txs)
 - **Ergo Operator Wallet**: `3Wvkg6K6nsLMz3KB7LXteGJ9zcVbHWSsGbrfFV4PBjKCVwh7JGAV` (key: `/etc/blockhost-broker/ergo-operator.key`)
 - **Ergo ECIES Key**: `/etc/blockhost-broker/ergo-ecies.key`
 
@@ -189,6 +188,6 @@ See BROKER_INTERFACE.md for detailed API schemas, database schema, config refere
 - EVM path is built into the Rust daemon (`blockhost-broker-rs/src/eth/`)
 - Additional chains use external adapter processes that POST to `http://127.0.0.1:8080/v1/allocations`
 - Each adapter is a long-running process with chain-specific tooling (Node.js for OPNet, Cardano, Ergo)
-- Ergo adapter uses Fleet SDK for tx building, ergo-relay for signing/broadcast, Explorer API for queries
+- Ergo adapter uses Fleet SDK for tx building, Explorer API for queries
 - Adapter owns: contract polling, encryption/decryption, response delivery
 - Broker core owns: IPAM, WireGuard, DNS, SQLite, allocation lifecycle
