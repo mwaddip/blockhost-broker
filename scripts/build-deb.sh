@@ -34,6 +34,15 @@ cp broker-chains.json "build/${PKG_NAME}/etc/blockhost/"
 
 # ── Chain client plugins ─────────────────────────────────────────────
 
+# Adapter _shared package: clients import from ../../../_shared/src/*.
+# esbuild walks up from those imports for transitive deps (@noble/*, @scure/*),
+# so node_modules must exist in _shared/ before any client is bundled.
+SHARED_DIR="${REPO_ROOT}/adapters/_shared"
+if [ -d "$SHARED_DIR" ] && [ ! -d "$SHARED_DIR/node_modules" ]; then
+    echo "Installing _shared dependencies..."
+    (cd "$SHARED_DIR" && npm ci --ignore-scripts)
+fi
+
 # OPNet client (esbuild bundle — single file, no node_modules needed)
 OPNET_CLIENT="${REPO_ROOT}/adapters/opnet/client"
 if [ -d "$OPNET_CLIENT/src" ]; then
